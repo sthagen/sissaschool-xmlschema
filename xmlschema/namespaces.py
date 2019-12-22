@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (c), 2016, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2019, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -9,393 +9,301 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 """
-This module contains functions and classes for managing namespaces's  
-XSD declarations/definitions.
+This module contains namespace definitions for W3C core standards and namespace related classes.
 """
-import logging as _logging
+from __future__ import unicode_literals
+import os
+import re
 
-from .exceptions import XMLSchemaKeyError, XMLSchemaNotBuiltError, XMLSchemaParseError
-from .qnames import *
-from .utils import camel_case_split, get_namespace, URIDict
-from .components import (
-    get_xsd_attribute, XsdComponent, XsdAttribute, XsdSimpleType,
-    XsdComplexType, XsdElement, XsdAttributeGroup, XsdGroup, XsdNotation
-)
+from .compat import MutableMapping, Mapping
 
-_logger = _logging.getLogger(__name__)
+###
+# Namespace URIs
+XSD_NAMESPACE = 'http://www.w3.org/2001/XMLSchema'
+"URI of the XML Schema Definition namespace (xs|xsd)"
+
+XSI_NAMESPACE = 'http://www.w3.org/2001/XMLSchema-instance'
+"URI of the XML Schema Instance namespace (xsi)"
+
+XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace'
+"URI of the XML namespace (xml)"
+
+XHTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
+XHTML_DATATYPES_NAMESPACE = 'http://www.w3.org/1999/xhtml/datatypes/'
+"URIs of the Extensible Hypertext Markup Language namespace (html)"
+
+XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink'
+"URI of the XML Linking Language (XLink)"
+
+XSLT_NAMESPACE = "http://www.w3.org/1999/XSL/Transform"
+"URI of the XSL Transformations namespace (xslt)"
+
+HFP_NAMESPACE = 'http://www.w3.org/2001/XMLSchema-hasFacetAndProperty'
+"URI of the XML Schema has Facet and Property namespace (hfp)"
+
+VC_NAMESPACE = 'http://www.w3.org/2007/XMLSchema-versioning'
+"URI of the XML Schema Versioning namespace (vc)"
 
 
-#
-# Defines the iterfind functions for XML Schema declarations
-def create_iterfind_by_tag(tag):
+###
+# Schema location hints
+
+SCHEMAS_DIR = os.path.join(os.path.dirname(__file__), 'validators/schemas/')
+
+LOCATION_HINTS = {
+    # Locally saved schemas
+    HFP_NAMESPACE: os.path.join(SCHEMAS_DIR, 'XMLSchema-hasFacetAndProperty_minimal.xsd'),
+    VC_NAMESPACE: os.path.join(SCHEMAS_DIR, 'XMLSchema-versioning_minimal.xsd'),
+    XLINK_NAMESPACE: os.path.join(SCHEMAS_DIR, 'xlink.xsd'),
+    XHTML_NAMESPACE: os.path.join(SCHEMAS_DIR, 'xhtml1-strict.xsd'),
+
+    # Remote locations: contributors can propose additional official locations
+    # for other namespaces for extending this list.
+    XSLT_NAMESPACE: os.path.join(SCHEMAS_DIR, 'http://www.w3.org/2007/schema-for-xslt20.xsd'),
+}
+
+
+###
+# Helper functions and classes
+
+NAMESPACE_PATTERN = re.compile(r'{([^}]*)}')
+
+
+def get_namespace(name):
+    if not name or name[0] != '{':
+        return ''
+
+    try:
+        return NAMESPACE_PATTERN.match(name).group(1)
+    except (AttributeError, TypeError):
+        return ''
+
+
+class NamespaceResourcesMap(MutableMapping):
     """
-    Defines a generator that produce all subelements that have a specific tag.
+    Dictionary for storing information about namespace resources. The values are
+    lists of strings. Setting an existing value appends the string to the value.
+    Setting a value with a list sets/replaces the value.
     """
-    tag = str(tag)
+    def __init__(self, *args, **kwargs):
+        self._store = dict()
+        self.update(*args, **kwargs)
 
-    def iterfind_function(elements, path=None, namespaces=None):
-        if isinstance(elements, list):
-            for _elem in elements:
-                for elem in _elem.iterfind(path or tag, namespaces or {}):
-                    if elem.tag == tag:
-                        yield _elem
+    def __getitem__(self, uri):
+        return self._store[uri]
+
+    def __setitem__(self, uri, value):
+        if isinstance(value, list):
+            self._store[uri] = value[:]
         else:
-            for elem in elements.iterfind(path or tag, namespaces or {}):
-                if elem.tag == tag:
-                    yield elem
-    iterfind_function.__name__ = 'iterfind_xsd_%ss' % '_'.join(camel_case_split(local_name(tag))).lower()
-
-    return iterfind_function
-
-iterfind_xsd_import = create_iterfind_by_tag(XSD_IMPORT_TAG)
-iterfind_xsd_include = create_iterfind_by_tag(XSD_INCLUDE_TAG)
-iterfind_xsd_redefine = create_iterfind_by_tag(XSD_REDEFINE_TAG)
-iterfind_xsd_simple_types = create_iterfind_by_tag(XSD_SIMPLE_TYPE_TAG)
-iterfind_xsd_complex_types = create_iterfind_by_tag(XSD_COMPLEX_TYPE_TAG)
-iterfind_xsd_attributes = create_iterfind_by_tag(XSD_ATTRIBUTE_TAG)
-iterfind_xsd_attribute_groups = create_iterfind_by_tag(XSD_ATTRIBUTE_GROUP_TAG)
-iterfind_xsd_elements = create_iterfind_by_tag(XSD_ELEMENT_TAG)
-iterfind_xsd_groups = create_iterfind_by_tag(XSD_GROUP_TAG)
-iterfind_xsd_notations = create_iterfind_by_tag(XSD_NOTATION_TAG)
-
-
-#
-# Defines the update functions for XML Schema structures
-def create_load_function(filter_function):
-
-    def load_xsd_globals(xsd_globals, schemas):
-        redefinitions = []
-        for schema in schemas:
-            if schema.built:
-                continue
-
-            target_namespace = schema.target_namespace
-            for elem in iterfind_xsd_redefine(schema.root):
-                for child in filter_function(elem):
-                    qname = get_qname(target_namespace, get_xsd_attribute(child, 'name'))
-                    redefinitions.append((qname, (child, schema)))
-
-            for elem in filter_function(schema.root):
-                qname = get_qname(target_namespace, get_xsd_attribute(elem, 'name'))
-                try:
-                    xsd_globals[qname].append((elem, schema))
-                except KeyError:
-                    xsd_globals[qname] = (elem, schema)
-                except AttributeError:
-                    xsd_globals[qname] = [xsd_globals[qname], (elem, schema)]
-
-        for qname, obj in redefinitions:
-            if qname not in xsd_globals:
-                raise XMLSchemaParseError("not a redefinition!", obj[0])
             try:
-                xsd_globals[qname].append(obj)
+                self._store[uri].append(value)
             except KeyError:
-                xsd_globals[qname] = obj
-            except AttributeError:
-                xsd_globals[qname] = [xsd_globals[qname], obj]
+                self._store[uri] = [value]
 
-    return load_xsd_globals
+    def __delitem__(self, uri):
+        del self._store[uri]
 
-load_xsd_simple_types = create_load_function(iterfind_xsd_simple_types)
-load_xsd_attributes = create_load_function(iterfind_xsd_attributes)
-load_xsd_attribute_groups = create_load_function(iterfind_xsd_attribute_groups)
-load_xsd_complex_types = create_load_function(iterfind_xsd_complex_types)
-load_xsd_elements = create_load_function(iterfind_xsd_elements)
-load_xsd_groups = create_load_function(iterfind_xsd_groups)
-load_xsd_notations = create_load_function(iterfind_xsd_notations)
+    def __iter__(self):
+        return iter(self._store)
 
+    def __len__(self):
+        return len(self._store)
 
-#
-# Defines the builder function for maps lookup functions.
-def create_lookup_function(map_name, xsd_classes):
-    if isinstance(xsd_classes, tuple):
-        types_desc = ' or '.join([c.__name__ for c in xsd_classes])
-    else:
-        types_desc = xsd_classes.__name__
+    def __repr__(self):
+        return repr(self._store)
 
-    def lookup(global_maps, qname):
-        try:
-            obj = getattr(global_maps, map_name)[qname]
-        except KeyError:
-            raise XMLSchemaKeyError("missing a %s object for %r!" % (types_desc, qname))
-        else:
-            if isinstance(obj, xsd_classes):
-                return obj
-            elif isinstance(obj, list) and isinstance(obj[0], xsd_classes):
-                return obj[0]
-            elif isinstance(obj, (tuple, list)):
-                raise XMLSchemaNotBuiltError(
-                    "a %s object for %r not built!" % (types_desc, qname), obj, qname
-                )
-            else:
-                raise XMLSchemaTypeError(
-                    "wrong type %s for %r, a %s required." % (type(obj), qname, types_desc)
-                )
-    return lookup
+    def clear(self):
+        self._store.clear()
 
 
-#
-# Defines the builder functions for XML Schema structures
-def create_builder_function(factory_key):
-
-    def build_xsd_map(xsd_globals, tag, **kwargs):
-        global_names = set(xsd_globals.keys())
-        factory_function = kwargs.get(factory_key)
-        last_not_built = 0
-        i = 0
-        while True:
-            i += 1
-            not_built = {}
-            for qname in global_names:
-                obj = xsd_globals[qname]
-                try:
-                    if isinstance(obj, XsdComponent):
-                        elem, schema = obj.elem, obj.schema
-                        if elem is None or elem.tag != tag or schema.built:
-                            continue
-                        res_qname, xsd_instance = factory_function(
-                            elem, schema, obj, is_global=True, **kwargs
-                        )
-                    elif isinstance(obj, tuple):
-                        elem, schema = obj
-                        if elem.tag != tag:
-                            continue
-                        res_qname, xsd_instance = factory_function(
-                            elem, schema, is_global=True, **kwargs
-                        )
-                    elif isinstance(obj, list):
-                        start = int(isinstance(obj[0], XsdComponent))
-                        xsd_instance = obj[0] if start else None
-                        for k in range(start, len(obj)):
-                            elem, schema = obj[k]
-                            if elem.tag != tag:
-                                break
-                            res_qname, xsd_instance = factory_function(
-                                elem, schema, xsd_instance, is_global=True, **kwargs
-                            )
-                            obj[0] = xsd_instance
-                    else:
-                        raise XMLSchemaTypeError(
-                            "unexpected type %r for XSD global %r" % (type(obj), qname)
-                        )
-
-                except XMLSchemaNotBuiltError as err:
-                    _logger.debug("%s: elem.attrib=%r", err, elem.attrib)
-                    not_built[qname] = err.qname
-                    if len(not_built) == last_not_built:
-                        raise XMLSchemaParseError(str(err), elem)
-
-                except (XMLSchemaTypeError, XMLSchemaKeyError) as err:
-                    _logger.debug("%s: elem.attrib=%r", err, elem.attrib)
-                    raise
-                else:
-                    if elem.tag != tag:
-                        continue
-                    if res_qname != qname:
-                        raise XMLSchemaValueError(
-                            "wrong result name: %r != %r" % (res_qname, qname)
-                        )
-                    _logger.debug("Build xsd_globals[%r] = %r", res_qname, xsd_instance)
-                    xsd_globals[qname] = xsd_instance
-
-            if not not_built:
-                break
-
-            last_not_built = len(not_built)
-
-            # Defines not-built element list from dependencies
-            global_names = [k for k, v in not_built.items() if v not in not_built]
-            while True:
-                names = [
-                    k for k, v in not_built.items() if k not in global_names and v in global_names
-                ]
-                if not names:
-                    break
-                global_names.extend(names)
-
-    return build_xsd_map
-
-build_xsd_simple_types = create_builder_function('simple_type_factory')
-build_xsd_attributes = create_builder_function('attribute_factory')
-build_xsd_attribute_groups = create_builder_function('attribute_group_factory')
-build_xsd_complex_types = create_builder_function('complex_type_factory')
-build_xsd_elements = create_builder_function('element_factory')
-build_xsd_groups = create_builder_function('group_factory')
-build_xsd_notations = create_builder_function('notation_factory')
-
-
-class XsdGlobals(object):
+class NamespaceMapper(MutableMapping):
     """
-    Mediator class for related XML schema instances. It stores the global 
-    declarations defined in the registered schemas. Register a schema to 
-    add it's declarations to the global maps.
+    A class to map/unmap namespace prefixes to URIs. The mapped namespaces are
+    automatically registered when set. Namespaces can be updated overwriting
+    the existing registration or inserted using an alternative prefix.
 
-    :param validator: the XMLSchema class that have to be used for initializing \
-    the object.
+    :param namespaces: initial data with namespace prefixes and URIs.
+    :param register_namespace: a two-arguments function for registering namespaces \
+    on ElementTree module.
     """
+    def __init__(self, namespaces=None, register_namespace=None):
+        self._namespaces = {}
+        self.register_namespace = register_namespace
+        if namespaces is not None:
+            self._namespaces.update(namespaces)
 
-    def __init__(self, validator):
-        self.validator = validator
-        self.namespaces = URIDict()     # Registered schemas by namespace URI
-        self.resources = URIDict()      # Registered schemas by resource URI
+    def __getitem__(self, prefix):
+        return self._namespaces[prefix]
 
-        self.types = {}                 # Global types (both complex and simple)
-        self.attributes = {}            # Global attributes
-        self.attribute_groups = {}      # Attribute groups
-        self.groups = {}                # Model groups
-        self.substitution_groups = {}   # Substitution groups
-        self.notations = {}             # Notations
-        self.elements = {}              # Global elements
-        self.base_elements = {}         # Global elements + global groups expansion
-        self._view_cache = {}           # Cache for namespace views
-
-        self.types.update(validator.BUILTIN_TYPES)
-
-    def copy(self):
-        """Makes a copy of the object."""
-        obj = XsdGlobals(self.validator)
-        obj.namespaces.update(self.namespaces)
-        obj.resources.update(self.resources)
-        obj.types.update(self.types)
-        obj.attributes.update(self.attributes)
-        obj.attribute_groups.update(self.attribute_groups)
-        obj.groups.update(self.groups)
-        obj.substitution_groups.update(self.substitution_groups)
-        obj.notations.update(self.notations)
-        obj.elements.update(self.elements)
-        obj.base_elements.update(self.base_elements)
-        return obj
-
-    __copy__ = copy
-
-    def register(self, schema):
-        """
-        Registers an XMLSchema instance.         
-        """
-        if schema.uri:
-            if schema.uri not in self.resources:
-                self.resources[schema.uri] = schema
-            elif self.resources[schema.uri] != schema:
-                return
-
+    def __setitem__(self, prefix, uri):
+        self._namespaces[prefix] = uri
         try:
-            ns_schemas = self.namespaces[schema.target_namespace]
-        except KeyError:
-            self.namespaces[schema.target_namespace] = [schema]
-        else:
-            if schema in ns_schemas:
+            self.register_namespace(prefix, uri)
+        except (TypeError, ValueError):
+            pass
+
+    def __delitem__(self, prefix):
+        del self._namespaces[prefix]
+
+    def __iter__(self):
+        return iter(self._namespaces)
+
+    def __len__(self):
+        return len(self._namespaces)
+
+    @property
+    def namespaces(self):
+        return self._namespaces
+
+    @property
+    def default_namespace(self):
+        return self._namespaces.get('')
+
+    def clear(self):
+        self._namespaces.clear()
+
+    def insert_item(self, prefix, uri):
+        """
+        A method for setting an item that checks the prefix before inserting.
+        In case of collision the prefix is changed adding a numerical suffix.
+        """
+        if not prefix:
+            if '' not in self._namespaces:
+                self._namespaces[prefix] = uri
                 return
-            if not any([schema.uri == obj.uri for obj in ns_schemas]):
-                ns_schemas.append(schema)
+            elif self._namespaces[''] == uri:
+                return
+            prefix = 'default'
 
-    def get_globals(self, map_name, namespace, fqn_keys=True):
-        """
-        Get a global map for a namespace. The map is cached by the instance.
-
-        :param map_name: can be the name of one of the XSD global maps \
-        (``'attributes'``, ``'attribute_groups'``, ``'elements'``, \
-        ``'groups'``, ``'elements'``).
-        :param namespace: is an optional mapping from namespace prefix \
-        to full qualified name. 
-        :param fqn_keys: if ``True`` the returned map's keys are fully \
-        qualified names, if ``False`` the returned map's keys are local names.
-        :return: a dictionary.
-        """
-        try:
-            return self._view_cache[(map_name, namespace, fqn_keys)]
-        except KeyError:
-            if fqn_keys:
-                view = self._view_cache[(map_name, namespace, fqn_keys)] = {
-                    k: v for k, v in getattr(self, map_name).items()
-                    if namespace == get_namespace(k)
-                }
+        while prefix in self._namespaces:
+            if self._namespaces[prefix] == uri:
+                return
+            match = re.search(r'(\d+)$', prefix)
+            if match:
+                index = int(match.group()) + 1
+                prefix = prefix[:match.span()[0]] + str(index)
             else:
-                view = self._view_cache[(map_name, namespace, fqn_keys)] = {
-                    local_name(k): v for k, v in getattr(self, map_name).items()
-                    if namespace == get_namespace(k)
-                }
-            return view
+                prefix += '0'
+        self._namespaces[prefix] = uri
 
-    lookup_type = create_lookup_function('types', (XsdSimpleType, XsdComplexType))
-    lookup_attribute = create_lookup_function('attributes', XsdAttribute)
-    lookup_attribute_group = create_lookup_function('attribute_groups', XsdAttributeGroup)
-    lookup_group = create_lookup_function('groups', XsdGroup)
-    lookup_notation = create_lookup_function('notations', XsdNotation)
-    lookup_element = create_lookup_function('elements', XsdElement)
-    lookup_base_element = create_lookup_function('base_elements', XsdElement)
-
-    def iter_schemas(self):
-        """Creates an iterator for the schemas registered in the instance."""
-        for ns_schemas in self.namespaces.values():
-            for schema in ns_schemas:
-                yield schema
-
-    def clear(self, remove_schemas=False):
+    def map_qname(self, qname):
         """
-        Clears the instance maps, removing also all the registered schemas 
-        and cleaning the cache.
+        Converts an extended QName to the prefixed format. Only registered
+        namespaces are mapped.
+
+        :param qname: a QName in extended format or a local name.
+        :return: a QName in prefixed format or a local name.
         """
-        self.types.clear()
-        self.attributes.clear()
-        self.attribute_groups.clear()
-        self.groups.clear()
-        self.substitution_groups.clear()
-        self.notations.clear()
-        self.elements.clear()
-        self.base_elements.clear()
-        self._view_cache.clear()
+        try:
+            if qname[0] != '{' or not self._namespaces:
+                return qname
+        except IndexError:
+            return qname
 
-        self.types.update(self.validator.BUILTIN_TYPES)
-        for schema in self.iter_schemas():
-            schema.built = False
+        qname_uri = get_namespace(qname)
+        for prefix, uri in self._namespaces.items():
+            if uri != qname_uri:
+                continue
+            if prefix:
+                self._namespaces[prefix] = uri
+                return qname.replace(u'{%s}' % uri, u'%s:' % prefix)
+            else:
+                if uri:
+                    self._namespaces[prefix] = uri
+                return qname.replace(u'{%s}' % uri, '')
+        else:
+            return qname
 
-        if remove_schemas:
-            self.namespaces = URIDict()
-            self.resources = URIDict()
-
-    def build(self):
+    def unmap_qname(self, qname, name_table=None):
         """
-        Builds the schemas registered in the instance, excluding
-        those that are already built.
+        Converts a QName in prefixed format or a local name to the extended QName format.
+        Local names are converted only if a default namespace is included in the instance.
+        If a *name_table* is provided a local name is mapped to the default namespace
+        only if not found in the name table.
+
+        :param qname: a QName in prefixed format or a local name
+        :param name_table: an optional lookup table for checking local names.
+        :return: a QName in extended format or a local name.
         """
-        kwargs = self.validator.OPTIONS.copy()
+        try:
+            if qname[0] == '{' or not self:
+                return qname
+        except IndexError:
+            return qname
 
-        # Load and build global declarations
-        load_xsd_notations(self.notations, self.iter_schemas())
-        build_xsd_notations(self.notations, XSD_NOTATION_TAG, **kwargs)
-        load_xsd_simple_types(self.types, self.iter_schemas())
-        build_xsd_simple_types(self.types, XSD_SIMPLE_TYPE_TAG, **kwargs)
-        load_xsd_attributes(self.attributes, self.iter_schemas())
-        build_xsd_attributes(self.attributes, XSD_ATTRIBUTE_TAG, **kwargs)
-        load_xsd_attribute_groups(self.attribute_groups, self.iter_schemas())
-        build_xsd_attribute_groups(self.attribute_groups, XSD_ATTRIBUTE_GROUP_TAG, **kwargs)
-        load_xsd_complex_types(self.types, self.iter_schemas())
-        build_xsd_complex_types(self.types, XSD_COMPLEX_TYPE_TAG, **kwargs)
-        load_xsd_elements(self.elements, self.iter_schemas())
-        build_xsd_elements(self.elements, XSD_ELEMENT_TAG, **kwargs)
-        load_xsd_groups(self.groups, self.iter_schemas())
-        build_xsd_groups(self.groups, XSD_GROUP_TAG, **kwargs)
+        try:
+            prefix, name = qname.split(':', 1)
+        except ValueError:
+            if not self._namespaces.get(''):
+                return qname
+            elif name_table is None or qname not in name_table:
+                return '{%s}%s' % (self._namespaces.get(''), qname)
+            else:
+                return qname
+        else:
+            try:
+                uri = self._namespaces[prefix]
+            except KeyError:
+                return qname
+            else:
+                return u'{%s}%s' % (uri, name) if uri else name
 
-        # Build substitution groups from element declarations
-        for xsd_element in self.elements.values():
-            if xsd_element.substitution_group:
-                name = reference_to_qname(xsd_element.substitution_group, xsd_element.namespaces)
-                if name[0] != '{':
-                    name = get_qname(xsd_element.target_namespace, name)
-                try:
-                    self.substitution_groups[name].add(xsd_element)
-                except KeyError:
-                    self.substitution_groups[name] = {xsd_element}
+    def transfer(self, other):
+        transferred = []
+        for k, v in other.items():
+            if k in self:
+                if v != self[k]:
+                    continue
+            else:
+                self[k] = v
+            transferred.append(k)
+        for k in transferred:
+            del other[k]
 
-        # Build all local declarations
-        build_xsd_groups(self.groups, XSD_GROUP_TAG, parse_local_groups=True, **kwargs)
-        build_xsd_complex_types(self.types, XSD_COMPLEX_TYPE_TAG, parse_local_groups=True, **kwargs)
-        build_xsd_elements(self.elements, XSD_ELEMENT_TAG, parse_local_groups=True, **kwargs)
 
-        # Update base_elements
-        self.base_elements.update(self.elements)
-        for group in self.groups.values():
-            self.base_elements.update({e.name: e for e in group.iter_elements()})
+class NamespaceView(Mapping):
+    """
+    A read-only map for filtered access to a dictionary that stores objects mapped from QNames.
+    """
+    def __init__(self, qname_dict, namespace_uri):
+        self.target_dict = qname_dict
+        self.namespace = namespace_uri
+        if namespace_uri:
+            self._key_fmt = '{' + namespace_uri + '}%s'
+        else:
+            self._key_fmt = '%s'
 
-        for schema in self.iter_schemas():
-            schema.built = True
+    def __getitem__(self, key):
+        return self.target_dict[self._key_fmt % key]
+
+    def __len__(self):
+        return len(self.as_dict())
+
+    def __iter__(self):
+        return iter(self.as_dict())
+
+    def __repr__(self):
+        return '%s(%s)' % (self.__class__.__name__, str(self.as_dict()))
+
+    def __contains__(self, key):
+        return self._key_fmt % key in self.target_dict
+
+    def __eq__(self, other):
+        return self.as_dict() == dict(other.items())
+
+    def copy(self, **kwargs):
+        return self.__class__(self, **kwargs)
+
+    def as_dict(self, fqn_keys=False):
+        if fqn_keys:
+            return {
+                k: v for k, v in self.target_dict.items()
+                if self.namespace == get_namespace(k)
+            }
+        else:
+            return {
+                k if k[0] != '{' else k[k.rindex('}') + 1:]: v
+                for k, v in self.target_dict.items()
+                if self.namespace == get_namespace(k)
+            }

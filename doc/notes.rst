@@ -4,7 +4,7 @@ Release notes
 License
 -------
 
-This *xmlschema* library is distributed under the terms of the `MIT License <http://opensource.org/licenses/MIT>`_.
+The *xmlschema* library is distributed under the terms of the `MIT License <http://opensource.org/licenses/MIT>`_.
 
 Support
 -------
