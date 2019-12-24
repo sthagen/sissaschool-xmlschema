@@ -371,11 +371,10 @@ class TestEncoding(XsdValidatorTestCase):
             expected=u'<A>\nhello<B1>abc</B1>\n<B2>10</B2>\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#'
         )
-        # FIXME: UnorderedConverter do not work, an XMLSchemaValidationError is expected!!
         self.check_encode(
             xsd_component=schema.elements['A'],
             data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello')]),
-            expected=u'<A>\nhello<B1>abc</B1>\n<B2>10</B2>\n</A>', indent=0, cdata_prefix='#'
+            expected=XMLSchemaValidationError, indent=0, cdata_prefix='#'
         )
 
     def test_strict_trailing_content(self):
