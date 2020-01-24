@@ -5,7 +5,7 @@ xmlschema
 .. xmlschema-introduction-start
 
 The *xmlschema* library is an implementation of `XML Schema <http://www.w3.org/2001/XMLSchema>`_
-for Python (supports Python 2.7 and Python 3.5+).
+for Python (supports Python 3.5+).
 
 This library arises from the needs of a solid Python layer for processing XML
 Schema based files for
@@ -36,18 +36,11 @@ This library includes the following features:
 * Support of XSD validation modes *strict*/*lax*/*skip*
 * Remote attacks protection by default using an XMLParser that forbids entities
 
-.. note::
-    Currently the XSD 1.1 validator is provided by class `XMLSchema11` and
-    the default `XMLSchema` class is still an alias of the XSD 1.0 validator,
-    the class `XMLSchema10`. From version 1.1 of the package the default
-    validator will be linked to the XSD 1.1 validator, a version that will also
-    removes support for Python 2.7.
-
 
 Installation
 ============
 
-You can install the library with *pip* in a Python 2.7 or Python 3.5+ environment::
+You can install the library with *pip* in a Python 3.5+ environment::
 
     pip install xmlschema
 
@@ -68,22 +61,21 @@ the file containing the schema as argument:
 .. code-block:: pycon
 
     >>> import xmlschema
-    >>> my_schema = xmlschema.XMLSchema('xmlschema/tests/test_cases/examples/vehicles/vehicles.xsd')
+    >>> my_schema = xmlschema.XMLSchema('tests/test_cases/examples/vehicles/vehicles.xsd')
 
 .. note::
     For XSD 1.1 schemas use the class `XMLSchema11`, because the default class
-    `XMLSchema` is still an alias of the XSD 1.0 validator class `XMLSchema10`.
-    From next minor release (v1.1) the default class will become `XMLSchema11`.
+    `XMLSchema` is an alias of the XSD 1.0 validator class `XMLSchema10`.
 
 The schema can be used to validate XML documents:
 
 .. code-block:: pycon
 
-    >>> my_schema.is_valid('xmlschema/tests/test_cases/examples/vehicles/vehicles.xml')
+    >>> my_schema.is_valid('tests/test_cases/examples/vehicles/vehicles.xml')
     True
-    >>> my_schema.is_valid('xmlschema/tests/test_cases/examples/vehicles/vehicles-1_error.xml')
+    >>> my_schema.is_valid('tests/test_cases/examples/vehicles/vehicles-1_error.xml')
     False
-    >>> my_schema.validate('xmlschema/tests/test_cases/examples/vehicles/vehicles-1_error.xml')
+    >>> my_schema.validate('tests/test_cases/examples/vehicles/vehicles-1_error.xml')
     Traceback (most recent call last):
       File "<stdin>", line 1, in <module>
       File "/home/brunato/Development/projects/xmlschema/xmlschema/validators/xsdbase.py", line 393, in validate
@@ -113,8 +105,8 @@ values that match to the data types declared by the schema:
 
     >>> import xmlschema
     >>> from pprint import pprint
-    >>> xs = xmlschema.XMLSchema('xmlschema/tests/test_cases/examples/collection/collection.xsd')
-    >>> pprint(xs.to_dict('xmlschema/tests/test_cases/examples/collection/collection.xml'))
+    >>> xs = xmlschema.XMLSchema('tests/test_cases/examples/collection/collection.xsd')
+    >>> pprint(xs.to_dict('tests/test_cases/examples/collection/collection.xml'))
     {'@xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd',
      'object': [{'@available': True,
                  '@id': 'b0836217462',
