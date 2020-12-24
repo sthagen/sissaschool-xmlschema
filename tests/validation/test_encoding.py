@@ -11,16 +11,15 @@
 import sys
 import os
 import unittest
+from textwrap import dedent
 
 from xmlschema import XMLSchemaEncodeError, XMLSchemaValidationError
 from xmlschema.converters import UnorderedConverter
-from xmlschema.compat import ordered_dict_class
-from xmlschema.qnames import local_name
 from xmlschema.etree import etree_element, etree_tostring, ElementTree
+from xmlschema.helpers import local_name, is_etree_element
 from xmlschema.validators.exceptions import XMLSchemaChildrenValidationError
-from xmlschema.helpers import is_etree_element
 from xmlschema.validators import XMLSchema11
-from xmlschema.testing import XsdValidatorTestCase, print_test_header
+from xmlschema.testing import XsdValidatorTestCase
 
 
 class TestEncoding(XsdValidatorTestCase):
@@ -49,7 +48,7 @@ class TestEncoding(XsdValidatorTestCase):
         """Test encode after a decode, checking the re-encoded tree."""
         filename = self.casepath('examples/collection/collection.xml')
         xt = ElementTree.parse(filename)
-        xd = self.col_schema.to_dict(filename, dict_class=ordered_dict_class)
+        xd = self.col_schema.to_dict(filename)
         elem = self.col_schema.encode(xd, path='./col:collection', namespaces=self.col_namespaces)
 
         self.assertEqual(
@@ -64,7 +63,8 @@ class TestEncoding(XsdValidatorTestCase):
     def test_string_based_builtin_types(self):
         self.check_encode(self.xsd_types['string'], 'sample string ', u'sample string ')
         self.check_encode(self.xsd_types['normalizedString'], ' sample string ', u' sample string ')
-        self.check_encode(self.xsd_types['normalizedString'], '\n\r sample\tstring\n', u'   sample string ')
+        self.check_encode(self.xsd_types['normalizedString'],
+                          '\n\r sample\tstring\n', u'   sample string ')
         self.check_encode(self.xsd_types['token'], '\n\r sample\t\tstring\n ', u'sample string')
         self.check_encode(self.xsd_types['language'], 'sample string', XMLSchemaValidationError)
         self.check_encode(self.xsd_types['language'], ' en ', u'en')
@@ -103,7 +103,8 @@ class TestEncoding(XsdValidatorTestCase):
 
     def test_list_builtin_types(self):
         self.check_encode(self.xsd_types['IDREFS'], ['first_name'], u'first_name')
-        self.check_encode(self.xsd_types['IDREFS'], 'first_name', u'first_name')  # Transform data to list
+        self.check_encode(self.xsd_types['IDREFS'],
+                          'first_name', u'first_name')  # Transform data to list
         self.check_encode(self.xsd_types['IDREFS'], ['one', 'two', 'three'], u'one two three')
         self.check_encode(self.xsd_types['IDREFS'], [1, 'two', 'three'], XMLSchemaValidationError)
         self.check_encode(self.xsd_types['NMTOKENS'], ['one', 'two', 'three'], u'one two three')
@@ -154,7 +155,8 @@ class TestEncoding(XsdValidatorTestCase):
         self.check_encode(list_of_booleans, [True, False, True], u'true false true')
         self.check_encode(list_of_booleans, [10, False, True], XMLSchemaEncodeError)
         self.check_encode(list_of_booleans, [True, False, 40.0], u'true false', validation='lax')
-        self.check_encode(list_of_booleans, [True, False, 40.0], u'true false 40.0', validation='skip')
+        self.check_encode(list_of_booleans, [True, False, 40.0],
+                          u'true false 40.0', validation='skip')
 
     def test_union_types(self):
         integer_or_float = self.st_schema.types['integer_or_float']
@@ -189,14 +191,18 @@ class TestEncoding(XsdValidatorTestCase):
         elem.text = 'true'
         self.check_encode(self.get_element('A', type='xs:boolean'), True, elem)
 
-        self.check_encode(self.get_element('A', type='xs:short'), 128000, XMLSchemaValidationError)
+        self.check_encode(self.get_element('A', type='xs:short'),
+                          128000, XMLSchemaValidationError)
         elem.text = '0'
         self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'), 0, elem)
-        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'), '0', XMLSchemaValidationError)
-        self.check_encode(self.get_element('A', type='xs:positiveInteger'), 0, XMLSchemaValidationError)
+        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'),
+                          '0', XMLSchemaValidationError)
+        self.check_encode(self.get_element('A', type='xs:positiveInteger'),
+                          0, XMLSchemaValidationError)
         elem.text = '-1'
         self.check_encode(self.get_element('A', type='xs:negativeInteger'), -1, elem)
-        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'), -1, XMLSchemaValidationError)
+        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'),
+                          -1, XMLSchemaValidationError)
 
     def test_complex_elements(self):
         schema = self.get_schema("""
@@ -226,7 +232,8 @@ class TestEncoding(XsdValidatorTestCase):
             schema.elements['A'], {'@a1': 10, '$': 'simple '},
             ElementTree.fromstring('<A a1="10">simple </A>')
         )
-        self.check_encode(schema.elements['A'], {'@a2': -1, '$': 'simple '}, XMLSchemaValidationError)
+        self.check_encode(schema.elements['A'], {'@a2': -1, '$': 'simple '},
+                          XMLSchemaValidationError)
 
         schema = self.get_schema("""
         <xs:element name="A" type="A_type" />
@@ -240,11 +247,12 @@ class TestEncoding(XsdValidatorTestCase):
         """)
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('B3', False)]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('B3', False)]),
             expected=u'<A>\n<B1>abc</B1>\n<B2>10</B2>\n<B3>false</B3>\n</A>',
             indent=0,
         )
-        self.check_encode(schema.elements['A'], {'B1': 'abc', 'B2': 10, 'B4': False}, XMLSchemaValidationError)
+        self.check_encode(schema.elements['A'], {'B1': 'abc', 'B2': 10, 'B4': False},
+                          XMLSchemaValidationError)
 
     def test_error_message(self):
         schema = self.schema_class(self.casepath('issues/issue_115/Rotation.xsd'))
@@ -263,9 +271,11 @@ class TestEncoding(XsdValidatorTestCase):
         self.assertTrue(message_lines, msg="Empty error message!")
         self.assertEqual(message_lines[-4], 'Instance:')
         if sys.version_info < (3, 8):
-            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" pitch="0.0" roll="0.0" yaw="-1.0" />'
+            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
+                   'pitch="0.0" roll="0.0" yaw="-1.0" />'
         else:
-            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" roll="0.0" pitch="0.0" yaw="-1.0" />'
+            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
+                   'roll="0.0" pitch="0.0" yaw="-1.0" />'
         self.assertEqual(message_lines[-2].strip(), text)
 
     def test_max_occurs_sequence(self):
@@ -319,31 +329,31 @@ class TestEncoding(XsdValidatorTestCase):
 
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B2', 10), ('B1', 'abc'), ('B3', True)]),
+            data=dict([('B2', 10), ('B1', 'abc'), ('B3', True)]),
             expected=XMLSchemaChildrenValidationError
         )
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B2', 10), ('B1', 'abc'), ('B3', True)]),
+            data=dict([('B2', 10), ('B1', 'abc'), ('B3', True)]),
             expected=u'<A>\n<B1>abc</B1>\n<B2>10</B2>\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#', converter=UnorderedConverter
         )
 
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
             expected='<A>\nhello<B1>abc</B1>\n<B2>10</B2>\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#', converter=UnorderedConverter
         )
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
             expected=u'<A>\n<B1>abc</B1>\n<B2>10</B2>\nhello\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#'
         )
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello')]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('#1', 'hello')]),
             expected=XMLSchemaValidationError, indent=0, cdata_prefix='#'
         )
 
@@ -363,19 +373,19 @@ class TestEncoding(XsdValidatorTestCase):
 
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B2', 10), ('B1', 'abc'), ('B3', True)]),
+            data=dict([('B2', 10), ('B1', 'abc'), ('B3', True)]),
             expected=u'<A>\n<B1>abc</B1>\n<B2>10</B2>\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#'
         )
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('#1', 'hello'), ('B3', True)]),
             expected=u'<A>\nhello<B1>abc</B1>\n<B2>10</B2>\n<B3>true</B3>\n</A>',
             indent=0, cdata_prefix='#'
         )
         self.check_encode(
             xsd_component=schema.elements['A'],
-            data=ordered_dict_class([('B1', 'abc'), ('B2', 10), ('#1', 'hello')]),
+            data=dict([('B1', 'abc'), ('B2', 10), ('#1', 'hello')]),
             expected=XMLSchemaValidationError, indent=0, cdata_prefix='#'
         )
 
@@ -408,7 +418,7 @@ class TestEncoding(XsdValidatorTestCase):
             </xs:element>
             """)
 
-        root = schema.to_etree(ordered_dict_class([('A', [1, 2]), ('B', [3, 4])]))
+        root = schema.to_etree(dict([('A', [1, 2]), ('B', [3, 4])]))
         self.assertListEqual([e.text for e in root], ['1', '3', '2', '4'])
 
         root = schema.to_etree({"A": [1, 2], "B": [3, 4]}, converter=UnorderedConverter)
@@ -417,11 +427,116 @@ class TestEncoding(XsdValidatorTestCase):
         root = schema.to_etree({"A": [1, 2], "B": [3, 4]}, unordered=True)
         self.assertListEqual([e.text for e in root], ['1', '3', '2', '4'])
 
+    def test_xsi_type_and_attributes_unmap__issue_214(self):
+        schema = self.schema_class("""<?xml version="1.0" encoding="utf-8"?>
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                       xmlns="http://xmlschema.test/ns"
+                       targetNamespace="http://xmlschema.test/ns">
+              
+              <xs:element name="a" type="xs:string"/>
+              <xs:complexType name="altType">
+                <xs:simpleContent>
+                  <xs:extension base="xs:string">
+                    <xs:attribute name="a1" type="xs:string" use="required"/>
+                  </xs:extension>
+                </xs:simpleContent>
+              </xs:complexType>
+            </xs:schema>""")
+
+        xml1 = """<a xmlns="http://xmlschema.test/ns">alpha</a>"""
+        self.assertEqual(schema.decode(xml1), 'alpha')
+
+        xml2 = """<a xmlns="http://xmlschema.test/ns" 
+                     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xsi:type="altType" a1="beta">alpha</a>"""
+
+        obj = schema.decode(xml2)
+        self.assertEqual(obj, {'@xmlns': 'http://xmlschema.test/ns',
+                               '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+                               '@xsi:type': 'altType', '@a1': 'beta', '$': 'alpha'})
+        root = schema.encode(obj, path='{http://xmlschema.test/ns}a')
+        self.assertEqual(root.tag, '{http://xmlschema.test/ns}a')
+        self.assertEqual(root.attrib, {
+            '{http://www.w3.org/2001/XMLSchema-instance}type': 'altType',
+            'a1': 'beta'
+        })
+
+    def test_element_encoding_with_defaults__issue_218(self):
+        schema = self.schema_class(dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="values" type="myType"/>
+                <xs:complexType name="myType">
+                    <xs:sequence>
+                        <xs:element name="b1" type="xs:boolean" default="1"/>
+                        <xs:element name="b2" type="xs:boolean" default="true"/>
+                        <xs:element name="b3" type="xs:boolean" default="false"/>
+                    </xs:sequence>
+               </xs:complexType>
+             </xs:schema>"""))
+
+        self.assertEqual(schema.decode('<values><b1/><b2/><b3/></values>'),
+                         {'b1': True, 'b2': True, 'b3': False})
+
+        values = schema.encode({'b1': None, 'b2': True, 'b3': False})
+        self.assertEqual(len(values), 3)
+        self.assertEqual(values[0].tag, 'b1')
+        self.assertEqual(values[0].text, '1')
+        self.assertEqual(values[1].tag, 'b2')
+        self.assertEqual(values[1].text, 'true')
+        self.assertEqual(values[2].tag, 'b3')
+        self.assertEqual(values[2].text, 'false')
+
+        values = schema.encode({'b1': False, 'b2': True, 'b3': None})
+        self.assertEqual(len(values), 3)
+        self.assertEqual(values[0].tag, 'b1')
+        self.assertEqual(values[0].text, 'false')
+        self.assertEqual(values[1].tag, 'b2')
+        self.assertEqual(values[1].text, 'true')
+        self.assertEqual(values[2].tag, 'b3')
+        self.assertEqual(values[2].text, 'false')
+
+    def test_attribute_encoding_with_defaults__issue_218(self):
+        schema = self.schema_class(dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="values" type="myType"/>
+                <xs:complexType name="myType">
+                    <xs:simpleContent>
+                        <xs:extension base="xs:string">
+                            <xs:attribute name="b1" type="xs:boolean" default="1"/>
+                            <xs:attribute name="b2" type="xs:boolean" default="true"/>
+                            <xs:attribute name="b3" type="xs:boolean" default="false"/>
+                        </xs:extension>
+                    </xs:simpleContent>
+               </xs:complexType>
+             </xs:schema>"""))
+
+        self.assertTrue(schema.is_valid('<values>content</values>'))
+        self.assertEqual(schema.decode('<values/>'),
+                         {'@b1': True, '@b2': True, '@b3': False})
+
+        elem = schema.encode({})
+        self.assertIsNone(elem.text)
+        self.assertEqual(elem.attrib, {'b1': '1', 'b2': 'true', 'b3': 'false'})
+
+        elem = schema.encode({'@b1': True, '@b3': True})
+        self.assertIsNone(elem.text)
+        self.assertEqual(elem.attrib, {'b1': 'true', 'b2': 'true', 'b3': 'true'})
+
+        elem = schema.encode({'@b2': False, '@b1': False})
+        self.assertIsNone(elem.text)
+        self.assertEqual(elem.attrib, {'b1': 'false', 'b2': 'false', 'b3': 'false'})
+
 
 class TestEncoding11(TestEncoding):
     schema_class = XMLSchema11
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema encoding with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

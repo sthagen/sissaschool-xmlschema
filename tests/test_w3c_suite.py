@@ -14,7 +14,6 @@ This script runs tests concerning the W3C XML Schema 1.1 test suite.
 import unittest
 import argparse
 import os.path
-import xml.etree.ElementTree as ElementTree
 import warnings
 
 try:
@@ -23,6 +22,7 @@ except ImportError:
     lxml_etree = None
 
 from xmlschema import validate, XMLSchema10, XMLSchema11, XMLSchemaException
+from xmlschema.etree import ElementTree
 
 TEST_SUITE_NAMESPACE = "http://www.w3.org/XML/2004/xml-schema-test-suite/"
 XLINK_NAMESPACE = "http://www.w3.org/1999/xlink"
@@ -33,35 +33,24 @@ ADMITTED_VALIDITY = {'valid', 'invalid', 'indeterminate'}
 # Tests that are incompatible with XSD meta-schema validation or that are postponed
 SKIPPED_TESTS = {
     ##
-    # Signed as valid that have to be checked
-    '../msData/additional/addB194.xsd',         # invalid xml:lang='enu'
-    '../msData/particles/particlesZ001.xsd',    # Invalid in XSD 1.0
+    # Skip for typos in test data
+    '../msData/regex/reZ003v.xml',                          # 13589
+    '../ibmData/instance_invalid/S3_10_6/s3_10_6ii01.xsd',  # 14911
+    '../ibmData/instance_invalid/S3_10_6/s3_10_6ii02.xsd',  # 14912
+    '../ibmData/instance_invalid/S3_10_6/s3_10_6ii04.xsd',  # 14914
+    '../ibmData/instance_invalid/S3_10_1/s3_10_1ii08.xsd',  # 15360
+    '../ibmData/instance_invalid/S3_10_1/s3_10_1ii09.xsd',  # 15361
+
+    ##
+    # Invalid schemas marked as valid
+    '../msData/additional/addB194.xsd',         # invalid xml:lang='enu' is a typo?
+    '../msData/particles/particlesZ001.xsd',    # Invalid XSD 1.0 schema (valid with XSD 1.1)
     '../msData/simpleType/stE110.xsd',          # Circular xs:union declaration
     '../saxonData/Missing/missing001.xsd',      # missing type (this may be valid in 'lax' mode?)
     '../saxonData/Missing/missing002.xsd',      # missing substitution group
     '../saxonData/Missing/missing003.xsd',      # missing type and substitution group
     '../saxonData/Missing/missing006.xsd',      # missing list item type
-    '../saxonData/VC/vc001.xsd',                # VC namespace required
-    '../saxonData/VC/vc002.xsd',                # VC namespace required
-    '../saxonData/VC/vc014.xsd',                # VC namespace required
-    '../saxonData/VC/vc024.xsd',                # VC 1.1? required
-    '../saxonData/XmlVersions/xv004.xsd',       # non-BMP chars allowed in names in XML 1.1+
-
-    ##
-    # Signed as valid that depends by implementation choice
-    '../saxonData/Assert/assert-simple007.xsd',     # XPath [err:FOCA0002] invalid lexical value
-
-    ##
-    # Signed as valid but not implemented yet
-    '../saxonData/Assert/assert011.xsd',          # TODO: XPath 2 doc() function in elementpath
-
-    ##
-    # Invalid that may be valid
-    '../msData/additional/adhocAddC002.xsd',  # Lack of the processor on XML namespace knowledge
-    '../msData/additional/test65026.xsd',  # Lack of the processor on XML namespace knowledge
-    '../msData/annotations/annotF001.xsd',  # Contains xml:lang="" ?? (but xml.xsd allows '')
-    '../msData/datatypes/Facets/base64Binary/'
-    'base64Binary_enumeration003.xsd',  # check base64 invalid values
+    '../msData/annotations/annotF001.xsd',      # xml.xsd allows xml:lang="" for un-declarations
 
     ##
     # XSD 1.0 limited URI (see RFC 2396 + RFC 2732)
@@ -70,29 +59,33 @@ SKIPPED_TESTS = {
     '../msData/datatypes/Facets/anyURI/anyURI_b004.xsd',
     '../msData/datatypes/Facets/anyURI/anyURI_b006.xsd',
 
-    '../msData/element/elemZ026.xsd',           # This is good because the head element is abstract
-    '../msData/element/elemZ031.xsd',           # Valid in Python that has arbitrary large integers
-    '../msData/group/groupH021.xsd',            # TODO: wrong in XSD 1.0, good in XSD 1.1
-    '../msData/identityConstraint/idC019.xsd',  # TODO: is it an error?
-    '../msData/identityConstraint/idI148.xsd',  # FIXME attribute::* select (restrict XPath parser)
-    '../msData/modelGroups/mgE006.xsd',  # Is valid? (is mg007.xsd invalid for the same reason)
-    '../msData/particles/particlesV020.xsd',
-    # 10942: see http://www.w3.org/Bugs/Public/show_bug.cgi?id=4147
+    ##
+    # Uncertain cases (disputed tests)
+    '../msData/group/groupH021.xsd',  # 8679: Unclear invalidity stated for XSD 1.0 ...
+    #
+    # Two uncertain equivalent cases related with element
+    # substitution and its equivalence with a choice group.
+    # Xerces says these are both invalid with XSD 1.0 and valid with XSD 1.1.
+    #
+    # http://www.w3.org/Bugs/Public/show_bug.cgi?id=4146
+    # http://www.w3.org/Bugs/Public/show_bug.cgi?id=4147
+    #
+    '../msData/element/elemZ026.xsd',         # 8541: bug id=4147
+    '../msData/particles/particlesV020.xsd',  # 10942: bug id=4147
 
     ##
-    # Invalid that maybe valid because depends by implementation choices
+    # 7295: Inapplicable test on URI (the first resource is not reachable anymore)
+    # https://www.w3.org/Bugs/Public/show_bug.cgi?id=4126
+    '../msData/datatypes/Facets/anyURI/anyURI_a004.xml',
+
+    ##
+    # Signed ad invalid, but valid because depends by implementation choices or platform.
+    #   https://www.w3.org/Bugs/Public/show_bug.cgi?id=4133
+    '../msData/schema/schG3.xml',
     '../msData/schema/schG6_a.xsd',  # Valid because the ns import is done once, validation fails.
     '../msData/schema/schG11_a.xsd',  # Valid because the ns import is done once, validation fails.
-
-    ##
-    # Indeterminate that depends by implementation choices
-    '../msData/particles/particlesZ026a.xsd',
-    '../msData/schema/schG14a.xsd',
-    '../msData/schema/schU3_a.xsd',     # Circular redefines
-    '../msData/schema/schU4_a.xsd',     # Circular redefines
-    '../msData/schema/schU5_a.xsd',     # Circular redefines
-    '../msData/schema/schZ012_a.xsd',   # Comparison of file urls to be case sensitive or not
-    '../msData/schema/schZ015.xsd',     # schemaLocation=""
+    '../msData/schema/schG12.xml',
+    '../msData/element/elemZ031.xsd',  # Valid because Python has arbitrary large integers
 
     ##
     # Invalid XML tests
@@ -109,10 +102,7 @@ SKIPPED_TESTS = {
     # 14896: wrong href for valid instanceTest name="e1bis.xml"
 
     ##
-    # Valid XML tests signed as 'invalid'
-    '../ibmData/instance_invalid/S3_4_2_4/s3_4_2_4ii03.xml',
-    # defaultAttributeApply is true (false in comment)
-
+    # Unicode version related
     '../msData/regex/reJ11.xml',
     '../msData/regex/reJ13.xml',
     '../msData/regex/reJ19.xml',
@@ -161,18 +151,23 @@ SKIPPED_TESTS = {
 
     ##
     # Skip for missing XML version 1.1 implementation
-    '../saxonData/XmlVersions/xv001.v01.xml',   # 14850
-    '../saxonData/XmlVersions/xv003.v01.xml',   # 14852
-    '../saxonData/XmlVersions/xv005.v01.xml',   # 14854
-    '../saxonData/XmlVersions/xv006.v01.xml',   # 14855: invalid character &#x07 (valid in 1.1)
-    '../saxonData/XmlVersions/xv006.n02.xml',   # 14855: invalid character &#x10000 (valid in 1.1)
-    '../saxonData/XmlVersions/xv008.v01.xml',   # 14857
-    '../saxonData/XmlVersions/xv008.n01.xml',   # 14857
+    '../saxonData/XmlVersions/xv001.v01.xml',  # 14850
+    '../saxonData/XmlVersions/xv003.v01.xml',  # 14852
+    '../saxonData/XmlVersions/xv004.xsd',      # 14853 non-BMP chars allowed in names in XML 1.1+
+    '../saxonData/XmlVersions/xv005.v01.xml',  # 14854
+    '../saxonData/XmlVersions/xv006.v01.xml',  # 14855 invalid character &#x07 (valid in XML 1.1)
+    '../saxonData/XmlVersions/xv006.n02.xml',  # 14855 invalid character &#x10000 (valid in XML 1.1)
+    '../saxonData/XmlVersions/xv007.v01.xml',  # 14856
+    '../saxonData/XmlVersions/xv008.v01.xml',  # 14857
+    '../saxonData/XmlVersions/xv008.n01.xml',
+    '../saxonData/XmlVersions/xv009.v02.xml',  # 14858
+    '../saxonData/XmlVersions/xv009.n02.xml',
+    '../saxonData/XmlVersions/xv009.n03.xml',
+    '../saxonData/XmlVersions/xv100.i.xml',    # 14859
+    '../saxonData/XmlVersions/xv100.c.xml',    # 14860
 
     ##
     # Skip for TODO
-    '../sunData/combined/005/test.1.v.xml',  # 3959: valid but needs equal op (#cos-ct-derived-ok)
-
     '../msData/additional/test93490_2.xml',  # 4793
     '../msData/additional/test93490_5.xml',  # 4796
     '../msData/additional/test93490_7.xml',  # 4798
@@ -180,26 +175,39 @@ SKIPPED_TESTS = {
     '../msData/additional/test93490_12.xml',  # 4803
     '../msData/additional/addB191.xml',       # 4824
     # Dynamic schema load cases
+}
 
+XSD10_SKIPPED_TESTS = {
+    # Invalid schemas marked as valid
+    '../msData/simpleType/stE072.xsd',  # 13868: a union derived from ID with a fixed value
+    '../msData/simpleType/stE072.xml',
 }
 
 XSD11_SKIPPED_TESTS = {
-    # Invalid that may be valid
+    # Valid schemas marked ad invalid
     '../msData/regex/reK86.xsd',                # \P{Is} is valid in regex for XSD 1.1
     '../msData/regex/reK87.xsd',                # \P{Is} is valid in regex for XSD 1.1
-    '../msData/particles/particlesHb009.xsd',   # valid in XSD 1.1
     '../msData/particles/particlesZ033_g.xsd',  # valid in XSD 1.1 (invalid for engine limitation)
-    '../saxonData/Override/over026.bad.xsd',    # Same as over003.xsd, that is signed as valid.
     '../saxonData/CTA/cta0043.xsd',  # Only a warning for type table difference on restriction
-    '../saxonData/Wild/wild069.xsd',  # Maybe inverted?
 
-    # TODO: schema tests
-    '../saxonData/CTA/cta9005err.xsd',  # 14549: Type alternative using an inherited attribute
-    '../saxonData/CTA/cta9008err.xsd',  # 14552: Type alternative using an inherited attribute
+    # TODO: Parse ENTITY declarations in DOCTYPE before enforce checking
+    '../saxonData/Id/id017.n01.xml',     # 14571-14575
+    '../saxonData/Id/id018.n01.xml',
+    '../saxonData/Id/id018.n02.xml',
+    '../saxonData/Id/id019.n01.xml',
+    '../saxonData/Id/id019.n02.xml',
+    '../saxonData/Id/id020.n01.xml',
+    '../saxonData/Id/id020.n02.xml',
+    '../saxonData/Id/id021.n01.xml',
+    '../saxonData/Id/id021.n02.xml',
 }
 
 DO_NOT_USE_META_SCHEMA = {
     '../msData/additional/test264908_1.xsd',
+}
+
+DO_NOT_USE_FALLBACK_LOCATIONS = {
+    '../msData/wildcards/wildZ001.xml',
 }
 
 # Total files counters
@@ -217,6 +225,14 @@ def fetch_xsd_test_suite():
         return suite_file
     else:
         raise FileNotFoundError("can't find the XSD suite index file suite.xml ...")
+
+
+def skip_message(source_href, group_num, version='each'):
+    if source_href.endswith('.xsd'):
+        msg = "Skip test number {} with schema {!r} for {} version ..."
+    else:
+        msg = "Skip test number {} with file {!r} for {} version ..."
+    print(msg.format(group_num, source_href, version))
 
 
 def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_version='1.0'):
@@ -246,10 +262,7 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
                 return
             if source_href in SKIPPED_TESTS:
                 if args.numbers:
-                    if source_href.endswith('.xsd'):
-                        print("Skip test number %d ..." % group_num)
-                    else:
-                        print("Skip file %r for test number %d ..." % (source_href, group_num))
+                    skip_message(source_href, group_num)
                 return
 
         # Normalize and check file path
@@ -265,7 +278,10 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
                 continue
             elif version not in args.version:
                 continue
-            elif version == '1.1' and source_href in XSD11_SKIPPED_TESTS:
+            elif source_href in XSD10_SKIPPED_TESTS and version == '1.0' or \
+                    source_href in XSD11_SKIPPED_TESTS and version == '1.1':
+                if args.numbers:
+                    skip_message(source_href, group_num, version)
                 continue
 
             for e in elem.findall('{%s}expected' % TEST_SUITE_NAMESPACE):
@@ -303,9 +319,13 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
                         for schema_href in elem.findall(tag)
                     ]
 
-                if source_href in DO_NOT_USE_META_SCHEMA:
-                    nonlocal use_meta
-                    use_meta = False
+            if source_href in DO_NOT_USE_META_SCHEMA:
+                nonlocal use_meta
+                use_meta = False
+
+            if source_href in DO_NOT_USE_FALLBACK_LOCATIONS:
+                nonlocal use_fallback
+                use_fallback = False
 
         return test_conf
 
@@ -319,6 +339,7 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
     global total_xsd_files
     global total_xml_files
     use_meta = True
+    use_fallback = True
 
     # Get schema/instance path
     for k, child in enumerate(group_elem.iterfind('{%s}schemaTest' % TEST_SUITE_NAMESPACE)):
@@ -372,22 +393,28 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
                             with warnings.catch_warnings():
                                 warnings.simplefilter('ignore')
                                 if len(item['sources']) <= 1:
-                                    schema_class(source, use_meta=use_meta)
+                                    schema_class(source, use_meta=use_meta,
+                                                 use_fallback=use_fallback)
                                 else:
-                                    schema = schema_class(source, use_meta=use_meta, build=False)
+                                    schema = schema_class(source, use_meta=use_meta,
+                                                          use_fallback=use_fallback, build=False)
                                     for other in item['sources'][1:]:
-                                        schema_class(other, global_maps=schema.maps, build=False)
+                                        schema_class(other, global_maps=schema.maps,
+                                                     use_fallback=use_fallback, build=False)
                                     schema.build()
                     else:
                         try:
                             with warnings.catch_warnings():
                                 warnings.simplefilter('ignore')
                                 if len(item['sources']) <= 1:
-                                    schema = schema_class(source, use_meta=use_meta)
+                                    schema = schema_class(source, use_meta=use_meta,
+                                                          use_fallback=use_fallback)
                                 else:
-                                    schema = schema_class(source, use_meta=use_meta, build=False)
+                                    schema = schema_class(source, use_meta=use_meta,
+                                                          use_fallback=use_fallback, build=False)
                                     for other in item['sources'][1:]:
-                                        schema_class(other, global_maps=schema.maps, build=False)
+                                        schema_class(other, global_maps=schema.maps,
+                                                     use_fallback=use_fallback, build=False)
                                     schema.build()
                         except XMLSchemaException as err:
                             schema = None
@@ -424,19 +451,22 @@ def create_w3c_test_group_case(args, filename, group_elem, group_num, xsd_versio
                                 if not schemas:
                                     validate(source, schema=schema, cls=schema_class)
                                 else:
-                                    xs = schema_class(schemas[0], use_meta=use_meta, build=False)
+                                    xs = schema_class(schemas[0], use_meta=use_meta,
+                                                      use_fallback=use_fallback, build=False)
                                     for other in schemas[1:]:
-                                        schema_class(other, global_maps=xs.maps, build=False)
+                                        schema_class(other, global_maps=xs.maps,
+                                                     use_fallback=use_fallback, build=False)
                                     xs.build()
                                     xs.validate(source)
                     else:
                         try:
                             with warnings.catch_warnings():
                                 warnings.simplefilter('ignore')
-                                if len(schemas) <= 1:
+                                if len(schemas) <= 1 and use_meta and use_fallback:
                                     validate(source, schema=schema, cls=schema_class)
                                 else:
-                                    xs = schema_class(schemas[0], use_meta=use_meta, build=False)
+                                    xs = schema_class(schemas[0], use_meta=use_meta,
+                                                      use_fallback=use_fallback, build=False)
                                     for other in schemas[1:]:
                                         schema_class(other, global_maps=xs.maps, build=False)
                                     xs.build()
@@ -591,8 +621,10 @@ def w3c_tests_factory(argv=None):
 
 
 if __name__ == '__main__':
-    from xmlschema.testing import print_test_header
+    import platform
+    header_template = "W3C XSD tests for xmlschema with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
 
-    print_test_header()
     globals().update(w3c_tests_factory())
     unittest.main(argv=[__name__])

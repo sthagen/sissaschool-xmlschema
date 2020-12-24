@@ -12,14 +12,12 @@ import unittest
 import os
 import platform
 import re
-import xml.etree.ElementTree as ElementTree
+import lxml.etree
 
-from xmlschema.compat import ordered_dict_class
-from xmlschema.testing import print_test_header
 from xmlschema.validators import XsdValidator, XsdComponent, XMLSchema10, \
-    XMLSchema11, XMLSchemaParseError, XMLSchemaValidationError
-from xmlschema.qnames import XSD_ELEMENT, XSD_ANNOTATION
-from xmlschema.namespaces import XSD_NAMESPACE
+    XMLSchema11, XMLSchemaParseError, XMLSchemaValidationError, XsdGroup, XsdSimpleType
+from xmlschema.names import XSD_NAMESPACE, XSD_ELEMENT, XSD_ANNOTATION, XSD_ANY_TYPE
+from xmlschema.etree import ElementTree
 
 CASES_DIR = os.path.join(os.path.dirname(__file__), '../test_cases')
 
@@ -153,23 +151,15 @@ class TestXsdComponent(unittest.TestCase):
         cls.schema = XMLSchema10(xsd_file)
 
     def test_initialization(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(AttributeError):
             XsdComponent(elem=None, schema=self.schema)
 
         with self.assertRaises(ValueError):
             XsdComponent(elem=ElementTree.Element('A'), schema=self.schema)
 
-    def test_schema_set(self):
-        other_schema = XMLSchema10("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-            <xs:element name="root"/>
-        </xs:schema>""")
-
-        with self.assertRaises(ValueError):
-            other_schema.elements['root'].schema = self.schema
-
     def test_is_override(self):
         self.assertFalse(self.schema.elements['cars'].is_override())
-        self.assertFalse(self.schema.elements['cars'].type.content_type[0].is_override())
+        self.assertFalse(self.schema.elements['cars'].type.content[0].is_override())
 
     def test_representation(self):
         schema = XMLSchema10("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -191,7 +181,7 @@ class TestXsdComponent(unittest.TestCase):
                          "XsdAttribute(ref='slot')")
 
     def test_parse_reference(self):
-        group = self.schema.elements['vehicles'].type.content_type
+        group = self.schema.elements['vehicles'].type.content
 
         name = '{%s}motorbikes' % XSD_NAMESPACE
         elem = ElementTree.Element(XSD_ELEMENT, name=name)
@@ -230,24 +220,6 @@ class TestXsdComponent(unittest.TestCase):
         with self.assertRaises(XMLSchemaParseError):
             xsd_element._parse_reference()
 
-    def test_parse_boolean_attribute(self):
-        name = '{%s}motorbikes' % self.schema.target_namespace
-        elem = ElementTree.Element(XSD_ELEMENT, name=name, flag='true')
-        xsd_element = self.FakeElement(elem=elem, name=name, schema=self.schema, parent=None)
-
-        self.assertIsNone(xsd_element._parse_boolean_attribute('cond'))
-        self.assertTrue(xsd_element._parse_boolean_attribute('flag'))
-        xsd_element.elem = ElementTree.Element(XSD_ELEMENT, name=name, flag='1')
-        self.assertTrue(xsd_element._parse_boolean_attribute('flag'))
-        xsd_element.elem = ElementTree.Element(XSD_ELEMENT, name=name, flag='false')
-        self.assertFalse(xsd_element._parse_boolean_attribute('flag'))
-        xsd_element.elem = ElementTree.Element(XSD_ELEMENT, name=name, flag='0')
-        self.assertFalse(xsd_element._parse_boolean_attribute('flag'))
-
-        xsd_element.elem = ElementTree.Element(XSD_ELEMENT, name=name, flag='False')
-        with self.assertRaises(XMLSchemaParseError):
-            xsd_element._parse_boolean_attribute('flag')
-
     def test_parse_child_component(self):
         name = '{%s}motorbikes' % self.schema.target_namespace
         elem = ElementTree.Element(XSD_ELEMENT, name=name)
@@ -260,11 +232,16 @@ class TestXsdComponent(unittest.TestCase):
         with self.assertRaises(XMLSchemaParseError):
             xsd_element._parse_child_component(elem)
 
+        self.assertEqual(len(xsd_element.errors), 0)
+        xsd_element.validation = 'lax'
+        xsd_element._parse_child_component(elem)
+        self.assertEqual(len(xsd_element.errors), 1)
+
     def test_parse_target_namespace(self):
         name = '{%s}motorbikes' % self.schema.target_namespace
 
         elem = ElementTree.Element(XSD_ELEMENT, name=name, targetNamespace='tns0')
-        group = self.schema.elements['vehicles'].type.content_type
+        group = self.schema.elements['vehicles'].type.content
 
         xsd_element = self.FakeElement(elem=elem, name=name, schema=self.schema, parent=None)
         with self.assertRaises(XMLSchemaParseError) as ctx:
@@ -309,6 +286,27 @@ class TestXsdComponent(unittest.TestCase):
         self.assertIn("use of attribute 'targetNamespace' is prohibited", ctx.exception.message)
 
         schema = XMLSchema11("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:complexType name="type0">
+                    <xs:sequence>
+                        <xs:any namespace="http://xmlschema.test/ns"/>
+                    </xs:sequence>
+                </xs:complexType>
+                <xs:complexType name="type1">
+                    <xs:complexContent>
+                        <xs:restriction base="type0">
+                            <xs:sequence>
+                                <xs:element name="elem1" targetNamespace="http://xmlschema.test/ns" 
+                                type="xs:integer"/>
+                            </xs:sequence>
+                        </xs:restriction>
+                    </xs:complexContent>      
+                </xs:complexType>
+                <xs:element name="root" type="type1"/>    
+            </xs:schema>""")
+        self.assertEqual(schema.elements['root'].type.content[0].target_namespace,
+                         'http://xmlschema.test/ns')
+
+        schema = XMLSchema11("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
                 <xs:element name="root">
                     <xs:complexType>
                         <xs:sequence>
@@ -317,7 +315,7 @@ class TestXsdComponent(unittest.TestCase):
                     </xs:complexType>
                 </xs:element>
             </xs:schema>""")
-        self.assertEqual(schema.elements['root'].type.content_type[0].name, 'node')
+        self.assertEqual(schema.elements['root'].type.content[0].name, 'node')
 
     def test_id_property(self):
         name = '{%s}motorbikes' % self.schema.target_namespace
@@ -368,10 +366,10 @@ class TestXsdComponent(unittest.TestCase):
         self.assertListEqual(list(xsd_element.iter_components(str)), [])
 
     def test_iter_ancestors(self):
-        xsd_element = self.schema.elements['cars'].type.content_type[0]
+        xsd_element = self.schema.elements['cars'].type.content[0]
         ancestors = [e for e in xsd_element.iter_ancestors()]
         self.assertListEqual(ancestors, [
-            self.schema.elements['cars'].type.content_type,
+            self.schema.elements['cars'].type.content,
             self.schema.elements['cars'].type,
             self.schema.elements['cars'],
         ])
@@ -389,6 +387,15 @@ class TestXsdComponent(unittest.TestCase):
                          <xs:annotation/>
                      </xs:element>
                  </xs:schema>""")
+        self.assertTrue(schema.elements['root'].annotation.built)
+
+        root = lxml.etree.XML("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                     <xs:element name="root">
+                        <!-- comment -->
+                        <xs:annotation/>
+                     </xs:element>
+                 </xs:schema>""")
+        schema = XMLSchema10(root)
         self.assertTrue(schema.elements['root'].annotation.built)
 
         schema = XMLSchema10("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -425,6 +432,10 @@ class TestXsdType(unittest.TestCase):
                          </xs:restriction>
                      </xs:simpleType>
 
+                     <xs:complexType name="emptyType2">
+                         <xs:attribute name="foo" type="xs:string"/>
+                     </xs:complexType>        
+
                      <xs:simpleType name="idType">
                          <xs:restriction base="xs:ID"/>
                      </xs:simpleType>
@@ -435,6 +446,10 @@ class TestXsdType(unittest.TestCase):
 
                      <xs:simpleType name="fooListType">
                          <xs:list itemType="xs:string"/>
+                     </xs:simpleType>
+
+                     <xs:simpleType name="fooUnionType">
+                         <xs:union memberTypes="xs:string xs:anyURI"/>
                      </xs:simpleType>
                      
                      <xs:complexType name="barType">
@@ -453,19 +468,41 @@ class TestXsdType(unittest.TestCase):
                          </xs:complexContent>
                      </xs:complexType>        
 
+                     <xs:complexType name="barResType">
+                         <xs:complexContent>
+                             <xs:restriction base="barType">
+                                 <xs:sequence>
+                                     <xs:element name="node"/>
+                                 </xs:sequence>
+                             </xs:restriction>
+                         </xs:complexContent>
+                     </xs:complexType>        
+
                      <xs:complexType name="mixedType" mixed="true">
                          <xs:sequence>
                              <xs:element name="node" type="xs:string"/>
                          </xs:sequence>
                      </xs:complexType>        
 
+                     <xs:element name="fooElem" type="fooType"/>
+                     <xs:element name="barElem" type="barType" block="extension"/>
+                     
                  </xs:schema>""")
 
     def test_content_type_label(self):
         self.assertEqual(self.schema.types['emptyType'].content_type_label, 'empty')
+        self.assertEqual(self.schema.types['emptyType2'].content_type_label, 'empty')
         self.assertEqual(self.schema.types['fooType'].content_type_label, 'simple')
         self.assertEqual(self.schema.types['barType'].content_type_label, 'element-only')
         self.assertEqual(self.schema.types['mixedType'].content_type_label, 'mixed')
+
+    def test_simple_type_property(self):
+        self.assertIsInstance(self.schema.types['emptyType'].simple_type, XsdSimpleType)
+        self.assertIsNone(self.schema.types['emptyType2'].simple_type)
+
+    def test_model_group_property(self):
+        self.assertIsNone(self.schema.types['emptyType'].model_group)
+        self.assertIsInstance(self.schema.types['emptyType2'].model_group, XsdGroup)
 
     def test_root_type(self):
         self.assertIs(self.schema.types['fooType'].root_type,
@@ -473,12 +510,22 @@ class TestXsdType(unittest.TestCase):
         self.assertIs(self.schema.types['fooListType'].root_type,
                       self.schema.meta_schema.types['string'])
         self.assertIs(self.schema.types['mixedType'].root_type,
-                      self.schema.types['mixedType'])
+                      self.schema.maps.types[XSD_ANY_TYPE])
         self.assertIs(self.schema.types['barExtType'].root_type,
-                      self.schema.types['barType'])
+                      self.schema.maps.types[XSD_ANY_TYPE])
 
     def test_is_atomic(self):
         self.assertFalse(self.schema.types['barType'].is_atomic())
+
+    def test_is_list(self):
+        self.assertFalse(self.schema.types['barType'].is_list())
+        self.assertTrue(self.schema.types['fooListType'].is_list())
+        self.assertFalse(self.schema.types['fooUnionType'].is_list())
+
+    def test_is_union(self):
+        self.assertFalse(self.schema.types['barType'].is_union())
+        self.assertFalse(self.schema.types['fooListType'].is_union())
+        self.assertTrue(self.schema.types['fooUnionType'].is_union())
 
     def test_is_datetime(self):
         self.assertFalse(self.schema.types['barType'].is_datetime())
@@ -502,6 +549,17 @@ class TestXsdType(unittest.TestCase):
     def test_is_restriction(self):
         self.assertTrue(self.schema.types['fooType'].is_restriction())
         self.assertFalse(self.schema.types['barExtType'].is_restriction())
+
+    def test_is_blocked(self):
+        element = self.schema.elements['fooElem']
+        self.assertFalse(self.schema.types['fooType'].is_blocked(element))
+        self.assertFalse(self.schema.types['barExtType'].is_blocked(element))
+        self.assertFalse(self.schema.types['barResType'].is_blocked(element))
+
+        element = self.schema.elements['barElem']
+        self.assertFalse(self.schema.types['fooType'].is_blocked(element))
+        self.assertTrue(self.schema.types['barExtType'].is_blocked(element))
+        self.assertFalse(self.schema.types['barResType'].is_blocked(element))
 
 
 class TestValidationMixin(unittest.TestCase):
@@ -541,7 +599,7 @@ class TestValidationMixin(unittest.TestCase):
 
     def test_encode(self):
         xml_file = os.path.join(CASES_DIR, 'examples/vehicles/vehicles.xml')
-        obj = self.schema.decode(xml_file, dict_class=ordered_dict_class)
+        obj = self.schema.decode(xml_file)
 
         root = self.schema.elements['vehicles'].encode(obj)
         self.assertEqual(root.tag, self.schema.elements['vehicles'].name)
@@ -566,142 +624,14 @@ class TestValidationMixin(unittest.TestCase):
         self.assertIsInstance(self.schema.validation_error('skip', 'Test error'),
                               XMLSchemaValidationError)
 
-
-class TestParticleMixin(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        xsd_file = os.path.join(CASES_DIR, 'examples/vehicles/vehicles.xsd')
-        cls.schema = XMLSchema10(xsd_file)
-
-    def test_occurs_property(self):
-        self.assertListEqual(self.schema.elements['cars'].occurs, [1, 1])
-        self.assertListEqual(self.schema.elements['cars'].type.content_type[0].occurs, [0, None])
-
-    def test_effective_min_occurs_property(self):
-        self.assertEqual(self.schema.elements['cars'].effective_min_occurs, 1)
-        self.assertEqual(self.schema.elements['cars'].type.content_type[0].effective_min_occurs, 0)
-
-    def test_effective_max_occurs_property(self):
-        self.assertEqual(self.schema.elements['cars'].effective_max_occurs, 1)
-        self.assertIsNone(self.schema.elements['cars'].type.content_type[0].effective_max_occurs)
-
-    def test_is_emptiable(self):
-        self.assertFalse(self.schema.elements['cars'].is_emptiable())
-        self.assertTrue(self.schema.elements['cars'].type.content_type[0].is_emptiable())
-
-    def test_is_empty(self):
-        self.assertFalse(self.schema.elements['cars'].is_empty())
-
-    def test_is_single(self):
-        self.assertTrue(self.schema.elements['cars'].is_single())
-        self.assertFalse(self.schema.elements['cars'].type.content_type[0].is_single())
-
-    def test_is_ambiguous(self):
-        self.assertFalse(self.schema.elements['cars'].is_ambiguous())
-        self.assertTrue(self.schema.elements['cars'].type.content_type[0].is_ambiguous())
-
-    def test_is_univocal(self):
-        self.assertTrue(self.schema.elements['cars'].is_univocal())
-        self.assertFalse(self.schema.elements['cars'].type.content_type[0].is_univocal())
-
-    def test_is_missing(self):
-        self.assertTrue(self.schema.elements['cars'].is_missing(0))
-        self.assertFalse(self.schema.elements['cars'].is_missing(1))
-        self.assertFalse(self.schema.elements['cars'].is_missing(2))
-        self.assertFalse(self.schema.elements['cars'].type.content_type[0].is_missing(0))
-
-    def test_is_over(self):
-        self.assertFalse(self.schema.elements['cars'].is_over(0))
-        self.assertTrue(self.schema.elements['cars'].is_over(1))
-        self.assertFalse(self.schema.elements['cars'].type.content_type[0].is_over(1000))
-
-    def test_has_occurs_restriction(self):
-        schema = XMLSchema10("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-                     <xs:complexType name="barType">
-                         <xs:sequence>
-                             <xs:element name="node0" />
-                             <xs:element name="node1" minOccurs="0"/>
-                             <xs:element name="node2" minOccurs="0" maxOccurs="unbounded"/>
-                             <xs:element name="node3" minOccurs="2" maxOccurs="unbounded"/>
-                             <xs:element name="node4" minOccurs="2" maxOccurs="10"/>
-                             <xs:element name="node5" minOccurs="4" maxOccurs="10"/>
-                             <xs:element name="node6" minOccurs="4" maxOccurs="9"/>
-                             <xs:element name="node7" minOccurs="1" maxOccurs="9"/>
-                             <xs:element name="node8" minOccurs="3" maxOccurs="11"/>
-                         </xs:sequence>
-                     </xs:complexType>                             
-                 </xs:schema>""")
-
-        xsd_group = schema.types['barType'].content_type
-
-        for k in range(9):
-            self.assertTrue(
-                xsd_group[k].has_occurs_restriction(xsd_group[k]), msg="Fail for node%d" % k
-            )
-
-        self.assertTrue(xsd_group[0].has_occurs_restriction(xsd_group[1]))
-        self.assertFalse(xsd_group[1].has_occurs_restriction(xsd_group[0]))
-        self.assertTrue(xsd_group[3].has_occurs_restriction(xsd_group[2]))
-        self.assertFalse(xsd_group[2].has_occurs_restriction(xsd_group[1]))
-        self.assertFalse(xsd_group[2].has_occurs_restriction(xsd_group[3]))
-        self.assertTrue(xsd_group[4].has_occurs_restriction(xsd_group[3]))
-        self.assertTrue(xsd_group[4].has_occurs_restriction(xsd_group[2]))
-        self.assertFalse(xsd_group[4].has_occurs_restriction(xsd_group[5]))
-        self.assertTrue(xsd_group[5].has_occurs_restriction(xsd_group[4]))
-        self.assertTrue(xsd_group[6].has_occurs_restriction(xsd_group[5]))
-        self.assertFalse(xsd_group[5].has_occurs_restriction(xsd_group[6]))
-        self.assertFalse(xsd_group[7].has_occurs_restriction(xsd_group[6]))
-        self.assertFalse(xsd_group[5].has_occurs_restriction(xsd_group[7]))
-        self.assertTrue(xsd_group[6].has_occurs_restriction(xsd_group[7]))
-        self.assertFalse(xsd_group[7].has_occurs_restriction(xsd_group[8]))
-        self.assertFalse(xsd_group[8].has_occurs_restriction(xsd_group[7]))
-
-    def test_parse_particle(self):
-        schema = XMLSchema10("""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-                     <xs:element name="root"/>
-                 </xs:schema>""")
-        xsd_element = schema.elements['root']
-
-        elem = ElementTree.Element('root', minOccurs='1', maxOccurs='1')
-        xsd_element._parse_particle(elem)
-
-        elem = ElementTree.Element('root', minOccurs='2', maxOccurs='1')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("maxOccurs must be 'unbounded' or greater than minOccurs",
-                      str(ctx.exception))
-
-        elem = ElementTree.Element('root', minOccurs='-1', maxOccurs='1')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("minOccurs value must be a non negative integer", str(ctx.exception))
-
-        elem = ElementTree.Element('root', minOccurs='1', maxOccurs='-1')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("maxOccurs must be 'unbounded' or greater than minOccurs",
-                      str(ctx.exception))
-
-        elem = ElementTree.Element('root', minOccurs='1', maxOccurs='none')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("maxOccurs value must be a non negative integer or 'unbounded'",
-                      str(ctx.exception))
-
-        elem = ElementTree.Element('root', minOccurs='2')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("minOccurs must be lesser or equal than maxOccurs",
-                      str(ctx.exception))
-
-        elem = ElementTree.Element('root', minOccurs='none')
-        with self.assertRaises(XMLSchemaParseError) as ctx:
-            xsd_element._parse_particle(elem)
-        self.assertIn("minOccurs value is not an integer value",
-                      str(ctx.exception))
+        error = self.schema.validation_error('lax', 'Test error')
+        self.assertIsNone(error.obj)
+        self.assertEqual(self.schema.validation_error('lax', error, obj=10).obj, 10)
 
 
 if __name__ == '__main__':
-    print_test_header()
+    header_template = "Test xmlschema's XSD base classes with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

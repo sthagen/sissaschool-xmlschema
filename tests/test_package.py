@@ -13,11 +13,9 @@
 import unittest
 import glob
 import fileinput
-import json
 import os
 import re
 import importlib
-import platform
 
 
 class TestPackaging(unittest.TestCase):
@@ -37,6 +35,7 @@ class TestPackaging(unittest.TestCase):
         exclude = {
             'regex.py': [240, 241],
             'codepoints.py': [534],
+            'cli.py': [117, 133, 137, 140],
         }
 
         message = "\nFound a debug missing statement at line %d or file %r: %r"
@@ -54,7 +53,9 @@ class TestPackaging(unittest.TestCase):
                 continue
 
             match = self.missing_debug.search(line)
-            self.assertIsNone(match, message % (lineno, filename, match.group(0) if match else None))
+            if match is None or filename.endswith('/cli.py') and match.group(0) == 'print(':
+                continue
+            self.assertIsNone(match, message % (lineno, filename, match.group(0)))
 
     def test_version(self):
         message = "\nFound a different version at line %d or file %r: %r (may be %r)."
@@ -81,18 +82,17 @@ class TestPackaging(unittest.TestCase):
                         message % (lineno, filename, match.group(1).strip('\'\"'), version)
                     )
 
-    def test_json_unicode_categories(self):
-        filename = os.path.join(self.source_dir, 'unicode_categories.json')
-        self.assertTrue(os.path.isfile(filename), msg="file %r is missing!" % filename)
-        with open(filename, 'r') as fp:
-            self.assertIsInstance(json.load(fp), dict, msg="file %r is not encoded in JSON format!" % filename)
-
     def test_base_schema_files(self):
         et = importlib.import_module('xml.etree.ElementTree')
-        schemas_dir = os.path.join(self.source_dir, 'validators/schemas')
+        schemas_dir = os.path.join(self.source_dir, 'schemas')
         base_schemas = [
-            'XSD_1.0/XMLSchema.xsd', 'XSD_1.1/XMLSchema.xsd', 'xhtml1-strict.xsd', 'xlink.xsd',
-            'xml_minimal.xsd', 'XMLSchema-hasFacetAndProperty_minimal.xsd', 'XMLSchema-instance_minimal.xsd'
+            'XSD_1.0/XMLSchema.xsd',
+            'XSD_1.1/XMLSchema.xsd',
+            'XHTML/xhtml1-strict.xsd',
+            'XLINK/xlink.xsd',
+            'XML/xml_minimal.xsd',
+            'HFP/XMLSchema-hasFacetAndProperty_minimal.xsd',
+            'XSI/XMLSchema-instance_minimal.xsd'
         ]
         for rel_path in base_schemas:
             filename = os.path.join(schemas_dir, rel_path)
@@ -101,8 +101,9 @@ class TestPackaging(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    header1 = "Test package %r installation" % os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    header2 = "with Python {} on platform {}".format(platform.python_version(), platform.platform())
-    print('{0}\n{1}\n{2}\n{0}'.format("*" * max(len(header1), len(header2)), header1, header2))
+    import platform
+    header_template = "Packaging tests for xmlschema with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
 
     unittest.main()

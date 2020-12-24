@@ -12,7 +12,7 @@ import unittest
 
 from xmlschema import XMLSchemaParseError
 from xmlschema.validators import XMLSchema11, XsdDefaultOpenContent
-from xmlschema.testing import XsdValidatorTestCase, print_test_header
+from xmlschema.testing import XsdValidatorTestCase
 
 
 class TestXsdWildcards(XsdValidatorTestCase):
@@ -51,7 +51,7 @@ class TestXsdWildcards(XsdValidatorTestCase):
 
         errors = schema.all_errors
         self.assertIn("wrong value '##all' in 'namespace' attribute", str(errors[1]))
-        self.assertIn("invalid value 'any', it must be one of ['skip'", str(errors[0]))
+        self.assertIn("value must be one of ['skip'", str(errors[0]))
 
     def test_overlap(self):
         schema = self.schema_class("""
@@ -81,7 +81,7 @@ class TestXsdWildcards(XsdValidatorTestCase):
             <xs:any namespace="##other" processContents="skip"/>
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].namespace, ['##other'])
+        self.assertEqual(schema.types['taggedType'].content[-1].namespace, ['##other'])
 
         schema = self.check_schema("""
         <xs:complexType name="taggedType">
@@ -90,7 +90,7 @@ class TestXsdWildcards(XsdValidatorTestCase):
             <xs:any namespace="##targetNamespace" processContents="skip"/>
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].namespace, [''])
+        self.assertEqual(schema.types['taggedType'].content[-1].namespace, [''])
 
         schema = self.check_schema("""
         <xs:complexType name="taggedType">
@@ -99,7 +99,7 @@ class TestXsdWildcards(XsdValidatorTestCase):
             <xs:any namespace="ns ##targetNamespace" processContents="skip"/>
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].namespace, ['ns', ''])
+        self.assertEqual(schema.types['taggedType'].content[-1].namespace, ['ns', ''])
 
         schema = self.check_schema("""
         <xs:complexType name="taggedType">
@@ -108,10 +108,10 @@ class TestXsdWildcards(XsdValidatorTestCase):
             <xs:any namespace="tns2 tns1 tns3" processContents="skip"/>
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].namespace,
+        self.assertEqual(schema.types['taggedType'].content[-1].namespace,
                          ['tns2', 'tns1', 'tns3'])
-        self.assertEqual(schema.types['taggedType'].content_type[-1].min_occurs, 1)
-        self.assertEqual(schema.types['taggedType'].content_type[-1].max_occurs, 1)
+        self.assertEqual(schema.types['taggedType'].content[-1].min_occurs, 1)
+        self.assertEqual(schema.types['taggedType'].content[-1].max_occurs, 1)
 
         schema = self.check_schema("""
         <xs:complexType name="taggedType">
@@ -120,9 +120,9 @@ class TestXsdWildcards(XsdValidatorTestCase):
             <xs:any minOccurs="10" maxOccurs="unbounded"/>
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].namespace, ('##any',))
-        self.assertEqual(schema.types['taggedType'].content_type[-1].min_occurs, 10)
-        self.assertIsNone(schema.types['taggedType'].content_type[-1].max_occurs)
+        self.assertEqual(schema.types['taggedType'].content[-1].namespace, ('##any',))
+        self.assertEqual(schema.types['taggedType'].content[-1].min_occurs, 10)
+        self.assertIsNone(schema.types['taggedType'].content[-1].max_occurs)
 
     def test_any_attribute_wildcard(self):
         schema = self.check_schema("""
@@ -624,7 +624,7 @@ class TestXsd11Wildcards(TestXsdWildcards):
             </xs:restriction>
           </xs:complexContent>
         </xs:complexType>""")
-        self.assertEqual(schema.types['derivedType'].content_type[0].name, 'foo')
+        self.assertEqual(schema.types['derivedType'].content[0].name, 'foo')
 
         self.check_schema("""
         <xs:complexType name="baseType">
@@ -672,8 +672,8 @@ class TestXsd11Wildcards(TestXsdWildcards):
             </xs:extension>
           </xs:complexContent>
         </xs:complexType>""")
-        self.assertEqual(schema.types['derivedType'].content_type[0][0].name, 'foo')
-        self.assertEqual(schema.types['derivedType'].content_type[1][0].name, 'bar')
+        self.assertEqual(schema.types['derivedType'].content[0][0].name, 'foo')
+        self.assertEqual(schema.types['derivedType'].content[1][0].name, 'bar')
 
         self.check_schema("""
         <xs:complexType name="baseType">
@@ -746,7 +746,7 @@ class TestXsd11Wildcards(TestXsdWildcards):
             <xs:any notNamespace="##targetNamespace" />
           </xs:sequence>
         </xs:complexType>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].not_namespace, [''])
+        self.assertEqual(schema.types['taggedType'].content[-1].not_namespace, [''])
 
         schema = self.schema_class("""
         <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
@@ -758,7 +758,7 @@ class TestXsd11Wildcards(TestXsdWildcards):
               </xs:sequence>
             </xs:complexType>
         </xs:schema>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].not_qname,
+        self.assertEqual(schema.types['taggedType'].content[-1].not_qname,
                          ['{tns1}foo', '{tns1}bar'])
 
         schema = self.schema_class("""
@@ -772,7 +772,7 @@ class TestXsd11Wildcards(TestXsdWildcards):
               </xs:sequence>
             </xs:complexType>
         </xs:schema>""")
-        self.assertEqual(schema.types['taggedType'].content_type[-1].not_qname,
+        self.assertEqual(schema.types['taggedType'].content[-1].not_qname,
                          ['##defined', '{tns1}foo', '##definedSibling'])
 
     def test_any_attribute_wildcard(self):
@@ -803,5 +803,9 @@ class TestXsd11Wildcards(TestXsdWildcards):
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema's XSD wildcards with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

@@ -8,9 +8,8 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 from ..exceptions import XMLSchemaException, XMLSchemaWarning, XMLSchemaValueError
-from ..qnames import qname_to_prefixed
-from ..etree import etree_tostring, etree_getpath
-from ..helpers import is_etree_element
+from ..etree import etree_tostring
+from ..helpers import get_prefixed_qname, etree_getpath, is_etree_element
 
 
 class XMLSchemaValidatorError(XMLSchemaException):
@@ -150,9 +149,9 @@ class XMLSchemaModelError(XMLSchemaValidatorError, ValueError):
         super(XMLSchemaModelError, self).__init__(
             validator=group,
             message=message,
-            elem=group.elem,
+            elem=getattr(group, 'elem', None),
             source=getattr(group, 'source', None),
-            namespaces=group.namespaces
+            namespaces=getattr(group, 'namespaces', None)
         )
 
 
@@ -209,8 +208,8 @@ class XMLSchemaValidationError(XMLSchemaValidatorError, ValueError):
         if is_etree_element(self.elem):
             try:
                 elem_as_string = etree_tostring(self.elem, self.namespaces, '  ', 20)
-            except (ValueError, TypeError):
-                elem_as_string = repr(self.elem)
+            except (ValueError, TypeError):        # pragma: no cover
+                elem_as_string = repr(self.elem)   # pragma: no cover
 
             if hasattr(self.elem, 'sourceline'):
                 msg.append("Instance (line %r):\n\n%s\n" % (self.elem.sourceline, elem_as_string))
@@ -299,11 +298,11 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
         self.occurs = occurs
         self.expected = expected
 
-        tag = qname_to_prefixed(elem.tag, validator.namespaces, use_empty=False)
+        tag = get_prefixed_qname(elem.tag, validator.namespaces, use_empty=False)
         if index >= len(elem):
             reason = "The content of element %r is not complete." % tag
         else:
-            child_tag = qname_to_prefixed(elem[index].tag, validator.namespaces, use_empty=False)
+            child_tag = get_prefixed_qname(elem[index].tag, validator.namespaces, use_empty=False)
             reason = "Unexpected child with tag %r at position %d." % (child_tag, index + 1)
 
         if occurs and particle.is_missing(occurs):

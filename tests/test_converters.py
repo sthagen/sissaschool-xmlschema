@@ -11,11 +11,16 @@
 import unittest
 import os
 
-from xmlschema import XMLSchema, XMLSchemaConverter, ElementData
-from xmlschema.etree import etree_element, etree_register_namespace, \
-    lxml_etree_element, lxml_etree_register_namespace, etree_elements_assert_equal
+try:
+    from lxml.etree import Element as lxml_etree_element
+except ImportError:
+    lxml_etree_element = None
 
-from xmlschema.converters import ParquetConverter
+from xmlschema import XMLSchema, XMLSchemaConverter
+from xmlschema.etree import etree_element
+from xmlschema.testing.helpers import etree_elements_assert_equal
+
+from xmlschema.converters import ColumnarConverter
 
 
 class TestConverters(unittest.TestCase):
@@ -29,19 +34,13 @@ class TestConverters(unittest.TestCase):
     def test_element_class_argument(self):
         converter = XMLSchemaConverter()
         self.assertIs(converter.etree_element_class, etree_element)
-        self.assertIs(converter.register_namespace, etree_register_namespace)
 
         converter = XMLSchemaConverter(etree_element_class=etree_element)
         self.assertIs(converter.etree_element_class, etree_element)
-        self.assertIs(converter.register_namespace, etree_register_namespace)
 
         if lxml_etree_element is not None:
             converter = XMLSchemaConverter(etree_element_class=lxml_etree_element)
             self.assertIs(converter.etree_element_class, lxml_etree_element)
-            self.assertIs(converter.register_namespace, lxml_etree_register_namespace)
-
-        with self.assertRaises(TypeError):
-            XMLSchemaConverter(etree_element_class=ElementData)
 
     def test_prefix_arguments(self):
         converter = XMLSchemaConverter(cdata_prefix='#')
@@ -50,8 +49,14 @@ class TestConverters(unittest.TestCase):
         converter = XMLSchemaConverter(attr_prefix='%')
         self.assertEqual(converter.attr_prefix, '%')
 
-        with self.assertRaises(ValueError):
-            XMLSchemaConverter(attr_prefix='_')
+        converter = XMLSchemaConverter(attr_prefix='_')
+        self.assertEqual(converter.attr_prefix, '_')
+
+        converter = XMLSchemaConverter(attr_prefix='attribute__')
+        self.assertEqual(converter.attr_prefix, 'attribute__')
+
+        converter = XMLSchemaConverter(text_key='text__')
+        self.assertEqual(converter.text_key, 'text__')
 
     def test_strip_namespace_argument(self):
         # Test for issue #161
@@ -88,6 +93,41 @@ class TestConverters(unittest.TestCase):
             {'#1': '1', 'node': [None, None], '#2': '2', '#3': '3'}
         )
 
+    def test_preserve_root__issue_215(self):
+        schema = XMLSchema("""
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" 
+                   xmlns="http://xmlschema.test/ns"
+                   targetNamespace="http://xmlschema.test/ns">
+            <xs:element name="a">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="b1" type="xs:string" maxOccurs="unbounded"/>
+                        <xs:element name="b2" type="xs:string" maxOccurs="unbounded"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema> 
+        """)
+
+        xml_data = """<tns:a xmlns:tns="http://xmlschema.test/ns"><b1/><b2/></tns:a>"""
+
+        obj = schema.decode(xml_data)
+        self.assertListEqual(list(obj), ['@xmlns:tns', 'b1', 'b2'])
+        self.assertEqual(schema.encode(obj).tag, '{http://xmlschema.test/ns}a')
+
+        obj = schema.decode(xml_data, preserve_root=True)
+        self.assertListEqual(list(obj), ['tns:a'])
+
+        root = schema.encode(obj, preserve_root=True, path='tns:a',
+                             namespaces={'tns': 'http://xmlschema.test/ns'})
+        self.assertEqual(root.tag, '{http://xmlschema.test/ns}a')
+
+        root = schema.encode(obj, preserve_root=True, path='{http://xmlschema.test/ns}a')
+        self.assertEqual(root.tag, '{http://xmlschema.test/ns}a')
+
+        root = schema.encode(obj, preserve_root=True)
+        self.assertEqual(root.tag, '{http://xmlschema.test/ns}a')
+
     def test_etree_element_method(self):
         converter = XMLSchemaConverter()
         elem = converter.etree_element('A')
@@ -100,7 +140,7 @@ class TestConverters(unittest.TestCase):
         col_xsd_filename = self.casepath('examples/collection/collection.xsd')
         col_xml_filename = self.casepath('examples/collection/collection.xml')
 
-        col_schema = XMLSchema(col_xsd_filename, converter=ParquetConverter)
+        col_schema = XMLSchema(col_xsd_filename, converter=ColumnarConverter)
 
         obj = col_schema.decode(col_xml_filename)
         self.assertIn("'authorid'", str(obj))
@@ -119,14 +159,16 @@ class TestConverters(unittest.TestCase):
 
         col_schema = XMLSchema(col_xsd_filename)
 
-        obj = col_schema.decode(col_xml_filename, converter=ParquetConverter, attr_prefix='__')
+        obj = col_schema.decode(col_xml_filename, converter=ColumnarConverter, attr_prefix='__')
         self.assertNotIn("'authorid'", str(obj))
         self.assertNotIn("'author_id'", str(obj))
         self.assertIn("'author__id'", str(obj))
 
 
 if __name__ == '__main__':
-    from xmlschema.testing import print_test_header
+    import platform
+    header_template = "Test xmlschema converters with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
 
-    print_test_header()
     unittest.main()

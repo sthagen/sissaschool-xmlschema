@@ -12,17 +12,21 @@ import unittest
 import os
 from decimal import Decimal
 import base64
-from elementpath import datatypes
 
+try:
+    import lxml.etree as lxml_etree
+except ImportError:
+    lxml_etree = None
+
+from elementpath import datatypes
 import xmlschema
 from xmlschema import XMLSchemaValidationError, ParkerConverter, BadgerFishConverter, \
-    AbderaConverter, JsonMLConverter
+    AbderaConverter, JsonMLConverter, ColumnarConverter
 
+from xmlschema.etree import ElementTree
 from xmlschema.converters import UnorderedConverter
-from xmlschema.compat import ordered_dict_class
-from xmlschema.etree import ElementTree, lxml_etree
 from xmlschema.validators import XMLSchema11
-from xmlschema.testing import XsdValidatorTestCase, print_test_header
+from xmlschema.testing import XsdValidatorTestCase
 
 VEHICLES_DICT = {
     '@xmlns:vh': 'http://example.com/vehicles',
@@ -236,6 +240,73 @@ COLLECTION_JSON_ML = [
      ]]
 ]
 
+
+COLLECTION_COLUMNAR = {
+    'collection': {
+        'collectionxsi:schemaLocation': 'http://example.com/ns/collection collection.xsd',
+        'object': [{
+            'objectid': 'b0836217462',
+            'objectavailable': True,
+            'position': 1,
+            'title': 'The Umbrellas',
+            'year': '1886',
+            'author': {
+                'authorid': 'PAR',
+                'name': 'Pierre-Auguste Renoir',
+                'born': '1841-02-25',
+                'dead': '1919-12-03',
+                'qualification': 'painter'
+            },
+            'estimation': Decimal('10000.00')}, {
+            'objectid': 'b0836217463',
+            'objectavailable': True,
+            'position': 2,
+            'title': None,
+            'year': '1925',
+            'author': {
+                'authorid': 'JM',
+                'name': 'Joan Miró',
+                'born': '1893-04-20',
+                'dead': '1983-12-25',
+                'qualification': 'painter, sculptor and ceramicist'
+            }
+        }]
+    }
+}
+
+COLLECTION_COLUMNAR_ = {
+    'collection': {
+        'collection_xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd',
+        'object': [{
+            'object_id': 'b0836217462',
+            'object_available': True,
+            'position': 1,
+            'title': 'The Umbrellas',
+            'year': '1886',
+            'author': {
+                'author_id': 'PAR',
+                'name': 'Pierre-Auguste Renoir',
+                'born': '1841-02-25',
+                'dead': '1919-12-03',
+                'qualification': 'painter'
+            },
+            'estimation': Decimal('10000.00')}, {
+            'object_id': 'b0836217463',
+            'object_available': True,
+            'position': 2,
+            'title': None,
+            'year': '1925',
+            'author': {
+                'author_id': 'JM',
+                'name': 'Joan Miró',
+                'born': '1893-04-20',
+                'dead': '1983-12-25',
+                'qualification': 'painter, sculptor and ceramicist'
+            }
+        }]
+    }
+}
+
 DATA_DICT = {
     '@xmlns:ns': 'ns',
     '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
@@ -403,7 +474,7 @@ class TestDecoding(XsdValidatorTestCase):
         with self.assertRaises(XMLSchemaValidationError) as ctx:
             schema.decode('<root name="ns0:bar">foo</root>')
         self.assertIn("failed validating 'ns0:bar'", str(ctx.exception))
-        self.assertIn("Reason: unmapped prefix 'ns0' on QName", str(ctx.exception))
+        self.assertIn("unmapped prefix 'ns0' on QName", str(ctx.exception))
         self.assertIn("Path: /root", str(ctx.exception))
 
     def test_json_dump_and_load(self):
@@ -610,6 +681,21 @@ class TestDecoding(XsdValidatorTestCase):
         json_ml_dict = self.col_schema.to_dict(self.col_xml_file, converter=JsonMLConverter)
         self.assertEqual(json_ml_dict, COLLECTION_JSON_ML)
 
+    def test_columnar_converter(self):
+        columnar_dict = self.col_schema.to_dict(self.col_xml_file, converter=ColumnarConverter)
+        self.assertEqual(columnar_dict, COLLECTION_COLUMNAR)
+        columnar_dict = self.col_schema.to_dict(
+            self.col_xml_file, converter=ColumnarConverter, attr_prefix='_',
+        )
+        self.assertEqual(columnar_dict, COLLECTION_COLUMNAR_)
+
+        with self.assertRaises(ValueError) as ctx:
+            self.col_schema.to_dict(
+                self.col_xml_file, converter=ColumnarConverter, attr_prefix='-',
+            )
+        self.assertEqual(str(ctx.exception),
+                         "attr_prefix can be the empty string or a single/double underscore")
+
     def test_dict_granularity(self):
         """Based on Issue #22, test to make sure an xsd indicating list with
         dictionaries, returns just that even when it has a single dict. """
@@ -630,7 +716,7 @@ class TestDecoding(XsdValidatorTestCase):
         xml_data_2 = ElementTree.fromstring('<root>\n    <child_1/>\n    <child_2/>\n</root>')
         self.assertIsNone(any_type.decode(xml_data_2))  # Currently no decoding yet
 
-    def test_choice_model_decoding(self):
+    def test_choice_model_decoding__issue_041(self):
         schema = xmlschema.XMLSchema(self.casepath('issues/issue_041/issue_041.xsd'))
         data = schema.to_dict(self.casepath('issues/issue_041/issue_041.xml'))
         self.assertEqual(data, {
@@ -644,8 +730,8 @@ class TestDecoding(XsdValidatorTestCase):
         schema = xmlschema.XMLSchema(self.casepath('issues/issue_046/issue_046.xsd'))
         xml_file = self.casepath('issues/issue_046/issue_046.xml')
         self.assertEqual(
-            schema.decode(xml_file, dict_class=ordered_dict_class, cdata_prefix='#'),
-            ordered_dict_class(
+            schema.decode(xml_file, cdata_prefix='#'),
+            dict(
                 [('@xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance'),
                  ('@xsi:noNamespaceSchemaLocation', 'issue_046.xsd'),
                  ('#1', 'Dear Mr.'), ('name', 'John Smith'),
@@ -704,8 +790,7 @@ class TestDecoding(XsdValidatorTestCase):
         # Issue #66
         self.check_decode(schema, '<A>120.48</A>', '120.48', decimal_type=str)
 
-    def test_nillable(self):
-        # Issue #76
+    def test_nillable__issue_076(self):
         xsd_string = """<?xml version="1.0" encoding="UTF-8"?>
         <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
             <xs:element name="foo" type="Foo" />
@@ -728,8 +813,7 @@ class TestDecoding(XsdValidatorTestCase):
         obj = xsd_schema.decode(xml_string_2, use_defaults=False)
         self.check_etree_elements(ElementTree.fromstring(xml_string_2), xsd_schema.encode(obj))
 
-    def test_default_namespace(self):
-        # Issue #77
+    def test_default_namespace__issue_077(self):
         xs = xmlschema.XMLSchema("""<?xml version="1.0" encoding="UTF-8"?>
         <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" 
             targetNamespace="http://example.com/foo">
@@ -748,13 +832,12 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertFalse(xs.is_valid('<value>alpha</value>'))
         self.assertEqual(xs.decode('<value>10</value>'), 10)
 
-    def test_union_types(self):
-        # For testing issue #103
+    def test_union_types__issue_103(self):
         decimal_or_nan = self.st_schema.types['myType']
         self.check_decode(decimal_or_nan, '95.0', Decimal('95.0'))
         self.check_decode(decimal_or_nan, 'NaN', u'NaN')
 
-    def test_default_values(self):
+    def test_default_values__issue_108(self):
         # From issue #108
         xsd_text = """<?xml version="1.0" encoding="utf-8"?>
             <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -820,7 +903,31 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertEqual(schema.to_dict("<root int_attr='wrong'>20</root>", validation='skip'),
                          {'@int_attr': 'wrong', '$': 20})
 
-    def test_error_message(self):
+    def test_keep_unknown_tags__issue_204(self):
+        schema = self.schema_class(self.casepath('issues/issue_204/issue_204.xsd'))
+        self.assertTrue(schema.is_valid(self.casepath('issues/issue_204/issue_204_1.xml')))
+        self.assertFalse(schema.is_valid(self.casepath('issues/issue_204/issue_204_2.xml')))
+
+        data = schema.decode(self.casepath('issues/issue_204/issue_204_2.xml'), validation='lax')
+        self.assertEqual(set(x for x in data[0] if x[0] != '@'), {'child2', 'child5'})
+
+        data = schema.decode(self.casepath('issues/issue_204/issue_204_3.xml'), validation='lax')
+        self.assertEqual(set(x for x in data[0] if x[0] != '@'), {'child2', 'child5'})
+
+        data = schema.decode(self.casepath('issues/issue_204/issue_204_3.xml'),
+                             validation='lax', keep_unknown=True)
+        self.assertEqual(set(x for x in data[0] if x[0] != '@'), {'child2', 'unknown', 'child5'})
+        self.assertEqual(data[0]['unknown'], {'a': [{'$': '1'}], 'b': [None]})
+
+        data = schema.decode(self.casepath('issues/issue_204/issue_204_2.xml'), validation='skip')
+        self.assertEqual(set(x for x in data if x[0] != '@'), {'child2', 'child5'})
+
+        data = schema.decode(self.casepath('issues/issue_204/issue_204_3.xml'),
+                             validation='skip', keep_unknown=True)
+        self.assertEqual(set(x for x in data if x[0] != '@'), {'child2', 'unknown', 'child5'})
+        self.assertEqual(data['unknown'], {'a': [{'$': '1'}], 'b': [None]})
+
+    def test_error_message__issue_115(self):
         schema = self.schema_class(self.casepath('issues/issue_115/Rotation.xsd'))
         rotation_data = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
                         'pitch="0.0" roll="0.0" yaw="-1.0" />'
@@ -882,6 +989,27 @@ class TestDecoding(XsdValidatorTestCase):
         }
         self.assertEqual(result, expected)
 
+    def test_issue_190(self):
+        # Changed is_single() for XsdElement to check also parent group.
+        schema = self.schema_class(self.casepath('issues/issue_190/issue_190.xsd'))
+        self.assertEqual(
+            schema.to_dict(self.casepath('issues/issue_190/issue_190.xml')),
+            {'a': {'c': [{'$': '1'}]}, 'b': {'c': [{'$': '1'}], 'e': [{'$': '1'}]}}
+        )
+
+    def test_issue_200(self):
+        # Schema path is required when path doesn't resolve to an XSD element
+        schema = self.schema_class(self.casepath('issues/issue_200/issue_200.xsd'))
+        self.assertEqual(
+            schema.to_dict(self.casepath('issues/issue_200/issue_200.xml'),
+                           path='/na:main/na:item[@doc_id=1]'),
+            {'@doc_id': 1, '@ref_id': 'k1', '$': 'content_k1'}
+        )
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.to_dict(self.casepath('issues/issue_200/issue_200.xml'),
+                           path='/na:main/na:item[@doc_id=2]'),
+        self.assertIn('is not an element of the schema', str(ctx.exception))
+
 
 class TestDecoding11(TestDecoding):
     schema_class = XMLSchema11
@@ -930,5 +1058,9 @@ class TestDecoding11(TestDecoding):
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema decoding with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

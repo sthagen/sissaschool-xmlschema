@@ -10,10 +10,10 @@
 #
 import unittest
 
-from xmlschema import XMLSchemaParseError
-from xmlschema.qnames import XSD_LIST, XSD_UNION
+from xmlschema import XMLSchemaParseError, XMLSchemaValidationError
+from xmlschema.names import XSD_LIST, XSD_UNION
 from xmlschema.validators import XMLSchema11
-from xmlschema.testing import XsdValidatorTestCase, print_test_header
+from xmlschema.testing import XsdValidatorTestCase
 
 
 class TestXsdSimpleTypes(XsdValidatorTestCase):
@@ -34,6 +34,32 @@ class TestXsdSimpleTypes(XsdValidatorTestCase):
         self.assertEqual(xs.types['test_list'].elem.tag, XSD_LIST)
         xs.types['test_union'].elem = xs.root[1]  # elem.tag == 'simpleType'
         self.assertEqual(xs.types['test_union'].elem.tag, XSD_UNION)
+
+    def test_variety_property(self):
+        schema = self.check_schema("""        
+        <xs:simpleType name="atomicType">
+            <xs:restriction base="xs:string"/>
+        </xs:simpleType>
+
+        <xs:simpleType name="listType">
+            <xs:list itemType="xs:string"/>
+        </xs:simpleType>
+        <xs:simpleType name="listType2">
+            <xs:restriction base="listType"/>
+        </xs:simpleType>
+
+        <xs:simpleType name="unionType">
+            <xs:union memberTypes="xs:string xs:integer xs:boolean"/>
+        </xs:simpleType>
+        <xs:simpleType name="unionType2">
+            <xs:restriction base="unionType"/>
+        </xs:simpleType>
+        """)
+        self.assertEqual(schema.types['atomicType'].variety, 'atomic')
+        self.assertEqual(schema.types['listType'].variety, 'list')
+        self.assertEqual(schema.types['listType2'].variety, 'list')
+        self.assertEqual(schema.types['unionType'].variety, 'union')
+        self.assertEqual(schema.types['unionType2'].variety, 'union')
 
     def test_final_attribute(self):
         self.check_schema("""
@@ -150,7 +176,7 @@ class TestXsd11SimpleTypes(TestXsdSimpleTypes):
               <xs:restriction base='xs:integer'>
                 <xs:assertion test='string-length($value) &lt; 2'/>
               </xs:restriction>
-            </xs:simpleType>""", XMLSchemaParseError)
+            </xs:simpleType>""")
 
         schema = self.check_schema("""
             <xs:simpleType name='MeasureType'>
@@ -161,12 +187,18 @@ class TestXsd11SimpleTypes(TestXsdSimpleTypes):
         self.assertTrue(schema.types['MeasureType'].is_valid('10'))
         self.assertFalse(schema.types['MeasureType'].is_valid('-1.5'))
 
-        self.check_schema("""
+        # Schema is valid but data value can't be compared with the string on the right
+        schema = self.check_schema("""
             <xs:simpleType name='RestrictedDateTimeType'>
               <xs:restriction base='xs:dateTime'>
                 <xs:assertion test="$value > '1999-12-31T23:59:59'"/>
               </xs:restriction>
-            </xs:simpleType>""", XMLSchemaParseError)
+            </xs:simpleType>""")
+        self.assertFalse(schema.types['RestrictedDateTimeType'].is_valid('2000-01-01T12:00:00'))
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.types['RestrictedDateTimeType'].validate('2000-01-01T12:00:00')
+        self.assertIn("wrong type <class 'str'> for operand", str(ctx.exception))
 
         schema = self.check_schema("""
         <xs:simpleType name='RestrictedDateTimeType'>
@@ -192,5 +224,9 @@ class TestXsd11SimpleTypes(TestXsdSimpleTypes):
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema's XSD simple types with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

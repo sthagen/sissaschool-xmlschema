@@ -11,13 +11,14 @@
 This module contains base functions and classes XML Schema components.
 """
 import re
+from typing import Optional
 
 from ..exceptions import XMLSchemaValueError, XMLSchemaTypeError
-from ..qnames import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, XML_LANG, \
+from ..names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, XML_LANG, \
     XSD_ANY_TYPE, XSD_ANY_SIMPLE_TYPE, XSD_ANY_ATOMIC_TYPE, XSD_ID, XSD_QNAME, \
-    XSD_OVERRIDE, get_qname, local_name, qname_to_prefixed, is_not_xsd_annotation
-from ..etree import etree_tostring
-from ..helpers import is_etree_element
+    XSD_OVERRIDE, XSD_NOTATION_TYPE, XSD_DECIMAL
+from ..etree import is_etree_element, etree_tostring
+from ..helpers import get_qname, local_name, get_prefixed_qname
 from .exceptions import XMLSchemaParseError, XMLSchemaValidationError
 
 XSD_TYPE_DERIVATIONS = {'extension', 'restriction'}
@@ -36,7 +37,7 @@ def check_validation_mode(validation):
                                   "'lax' or 'skip': %r" % validation)
 
 
-class XsdValidator(object):
+class XsdValidator:
     """
     Common base class for XML Schema validator, that represents a PSVI (Post Schema Validation
     Infoset) information item. A concrete XSD validator have to report its validity collecting
@@ -51,14 +52,11 @@ class XsdValidator(object):
     :ivar errors: XSD validator building errors.
     :vartype errors: list
     """
-    xsd_version = None
+    xsd_version = elem = None
 
     def __init__(self, validation='strict'):
         self.validation = validation
         self.errors = []
-
-    def __str__(self):
-        return self.__repr__()
 
     @property
     def built(self):
@@ -143,12 +141,9 @@ class XsdValidator(object):
 
         if validation == 'skip':
             return
-
-        if is_etree_element(elem):
-            pass
         elif elem is None:
-            elem = getattr(self, 'elem', None)
-        else:
+            elem = self.elem
+        elif not is_etree_element(elem):
             msg = "the argument 'elem' must be an Element instance, not {!r}."
             raise XMLSchemaTypeError(msg.format(elem))
 
@@ -221,42 +216,29 @@ class XsdComponent(XsdValidator):
     parent = None
     name = None
     ref = None
+    annotation = None
     qualified = True
+    redefine = None
 
-    def __init__(self, elem, schema, parent=None, name=None):
+    def __init__(self, elem, schema, parent=None, name: Optional[str] = None):
         super(XsdComponent, self).__init__(schema.validation)
-        if name is not None:
-            assert name and (name[0] == '{' or not schema.target_namespace), \
-                "name=%r argument: must be a qualified name of the target namespace." % name
+        if name:
             self.name = name
         if parent is not None:
             self.parent = parent
         self.schema = schema
+        self.maps = schema.maps
         self.elem = elem
 
     def __setattr__(self, name, value):
-        if name == "elem":
-            if not is_etree_element(value):
-                raise XMLSchemaTypeError(
-                    "%r attribute must be an Etree Element: %r" % (name, value)
-                )
-            elif value.tag not in self._ADMITTED_TAGS:
-                raise XMLSchemaValueError(
-                    "wrong XSD element %r for %r, must be one of %r." % (
-                        local_name(value.tag), self,
-                        [local_name(tag) for tag in self._ADMITTED_TAGS]
-                    )
-                )
-            super(XsdComponent, self).__setattr__(name, value)
-            self._parse()
-            return
-        elif name == "schema":
-            if hasattr(self, 'schema') and self.schema.target_namespace != value.target_namespace:
-                raise XMLSchemaValueError(
-                    "cannot change 'schema' attribute of %r: the actual %r has a different "
-                    "target namespace than %r." % (self, self.schema, value)
-                )
         super(XsdComponent, self).__setattr__(name, value)
+        if name == 'elem':
+            if value.tag not in self._ADMITTED_TAGS:
+                msg = "wrong XSD element {!r} for {!r}, must be one of {!r}"
+                raise XMLSchemaValueError(
+                    msg.format(value.tag, self.__class__, self._ADMITTED_TAGS)
+                )
+            self._parse()
 
     @property
     def xsd_version(self):
@@ -298,42 +280,34 @@ class XsdComponent(XsdValidator):
         return self.schema.namespaces
 
     @property
-    def maps(self):
-        """Property that references to schema's global maps."""
-        return self.schema.maps
-
-    @property
     def any_type(self):
         """Property that references to the xs:anyType instance of the global maps."""
-        return self.schema.maps.types[XSD_ANY_TYPE]
+        return self.maps.types[XSD_ANY_TYPE]
 
     @property
     def any_simple_type(self):
         """Property that references to the xs:anySimpleType instance of the global maps."""
-        return self.schema.maps.types[XSD_ANY_SIMPLE_TYPE]
+        return self.maps.types[XSD_ANY_SIMPLE_TYPE]
 
     @property
     def any_atomic_type(self):
         """Property that references to the xs:anyAtomicType instance of the global maps."""
-        return self.schema.maps.types[XSD_ANY_ATOMIC_TYPE]
+        return self.maps.types[XSD_ANY_ATOMIC_TYPE]
 
     def __repr__(self):
-        if self.name is None:
-            return '<%s at %#x>' % (self.__class__.__name__, id(self))
-        elif self.ref is not None:
+        if self.ref is not None:
             return '%s(ref=%r)' % (self.__class__.__name__, self.prefixed_name)
         else:
             return '%s(name=%r)' % (self.__class__.__name__, self.prefixed_name)
 
     def _parse(self):
         del self.errors[:]
-        try:
-            if self.elem[0].tag == XSD_ANNOTATION:
-                self.annotation = XsdAnnotation(self.elem[0], self.schema, self)
-            else:
-                self.annotation = None
-        except (TypeError, IndexError):
-            self.annotation = None
+        for child in self.elem:
+            if child.tag == XSD_ANNOTATION:
+                self.annotation = XsdAnnotation(child, self.schema, self)
+                break
+            elif not callable(child.tag):
+                break
 
     def _parse_reference(self):
         """
@@ -362,32 +336,24 @@ class XsdComponent(XsdValidator):
             except (KeyError, ValueError, RuntimeError) as err:
                 self.parse_error(err)
             else:
-                if self._parse_child_component(self.elem) is not None:
+                if self._parse_child_component(self.elem, strict=False) is not None:
                     self.parse_error("a reference component cannot have "
                                      "child definitions/declarations")
                 return True
 
-    def _parse_boolean_attribute(self, name):
-        try:
-            value = self.elem.attrib[name].strip()
-        except KeyError:
-            return
-        else:
-            if value in ('true', '1'):
-                return True
-            elif value in ('false', '0'):
-                return False
-            else:
-                self.parse_error("wrong value %r for boolean attribute %r" % (value, name))
-
     def _parse_child_component(self, elem, strict=True):
         child = None
-        for index, child in enumerate(filter(is_not_xsd_annotation, elem)):
-            if not strict:
-                return child
-            elif index:
+        for e in elem:
+            if e.tag == XSD_ANNOTATION or callable(e.tag):
+                continue
+            elif not strict:
+                return e
+            elif child is not None:
                 msg = "too many XSD components, unexpected {!r} found at position {}"
-                self.parse_error(msg.format(child, index), elem)
+                self.parse_error(msg.format(child, elem[:].index(e)), elem)
+                break
+            else:
+                child = e
         return child
 
     def _parse_target_namespace(self):
@@ -423,15 +389,18 @@ class XsdComponent(XsdValidator):
 
     @property
     def local_name(self):
+        """The local part of the name of the component, or `None` if the name is `None`."""
         return local_name(self.name)
 
     @property
     def qualified_name(self):
+        """The name of the component in extended format, or `None` if the name is `None`."""
         return get_qname(self.target_namespace, self.name)
 
     @property
     def prefixed_name(self):
-        return qname_to_prefixed(self.name, self.namespaces)
+        """The name of the component in prefixed format, or `None` if the name is `None`."""
+        return get_prefixed_qname(self.name, self.namespaces)
 
     @property
     def id(self):
@@ -452,8 +421,8 @@ class XsdComponent(XsdValidator):
         `False` otherwise. For XSD elements the matching is extended to substitutes.
 
         :param name: a local or fully-qualified name.
-        :param default_namespace: used if it's not None and not empty for completing the name \
-        argument in case it's a local name.
+        :param default_namespace: used if it's not None and not empty for completing \
+        the name argument in case it's a local name.
         :param kwargs: additional options that can be used by certain components.
         """
         if not name:
@@ -478,7 +447,7 @@ class XsdComponent(XsdValidator):
         if self.parent is None:
             return self
         component = self.parent
-        while component is not self:
+        while component is not self:  # pragma: no cover
             if component.parent is None:
                 return component
             component = component.parent
@@ -515,12 +484,9 @@ class XsdComponent(XsdValidator):
         ancestor = self
         while True:
             ancestor = ancestor.parent
-            if ancestor is None:
+            if ancestor is None or xsd_classes and not isinstance(ancestor, xsd_classes):
                 break
-            elif xsd_classes is None or isinstance(ancestor, xsd_classes):
-                yield ancestor
-            else:
-                break
+            yield ancestor
 
     def tostring(self, indent='', max_lines=None, spaces_for_tab=4):
         """Serializes the XML elements that declare or define the component to a string."""
@@ -583,7 +549,6 @@ class XsdType(XsdComponent):
     block = None
     base_type = None
     derivation = None
-    redefine = None
     _final = None
 
     @property
@@ -596,31 +561,52 @@ class XsdType(XsdComponent):
 
     @property
     def content_type_label(self):
-        if self.is_empty():
-            return 'empty'
-        elif self.has_simple_content():
-            return 'simple'
-        elif self.is_element_only():
-            return 'element-only'
-        elif self.has_mixed_content():
-            return 'mixed'
-        else:
-            return 'unknown'
+        """The content type classification."""
+        raise NotImplementedError()
+
+    @property
+    def sequence_type(self):
+        """The XPath sequence type associated with the content."""
+        raise NotImplementedError()
 
     @property
     def root_type(self):
-        """The root type of the type definition hierarchy. Is itself for a root type."""
-        if self.base_type is None:
-            return self  # Note that a XsdUnion type is always considered a root type
+        """
+        The root type of the type definition hierarchy. For an atomic type
+        is the primitive type. For a list is the primitive type of the item.
+        For a union is the base union type. For a complex type is xs:anyType.
+        """
+        if self.is_complex() and self.attributes:
+            return self.maps.types[XSD_ANY_TYPE]
+        elif self.base_type is None:
+            return self if self.is_simple() else self.maps.types[XSD_ANY_TYPE]
 
         try:
             if self.base_type.is_simple():
                 return self.base_type.primitive_type
             else:
-                return self.base_type.content_type.primitive_type
+                return self.base_type.content.primitive_type
         except AttributeError:
             # The type has complex or XsdList content
-            return self.base_type
+            return self.base_type.root_type
+
+    @property
+    def simple_type(self):
+        """
+        Property that is the instance itself for a simpleType. For a
+        complexType is the instance's *content* if this is a simpleType
+        or `None` if the instance's *content* is a model group.
+        """
+        raise NotImplementedError()
+
+    @property
+    def model_group(self):
+        """
+        Property that is `None` for a simpleType. For a complexType is
+        the instance's *content* if this is a model group or `None` if
+        the instance's *content* is a simpleType.
+        """
+        raise NotImplementedError()
 
     @staticmethod
     def is_simple():
@@ -638,6 +624,16 @@ class XsdType(XsdComponent):
         return False
 
     @staticmethod
+    def is_list():
+        """Returns `True` if the instance is a list simpleType, `False` otherwise."""
+        return False
+
+    @staticmethod
+    def is_union():
+        """Returns `True` if the instance is a union simpleType, `False` otherwise."""
+        return False
+
+    @staticmethod
     def is_datetime():
         """
         Returns `True` if the instance is a datetime/duration XSD builtin-type, `False` otherwise.
@@ -645,7 +641,7 @@ class XsdType(XsdComponent):
         return False
 
     def is_empty(self):
-        """Returns `True` if the instance has an empty value or content, `False` otherwise."""
+        """Returns `True` if the instance has an empty content, `False` otherwise."""
         raise NotImplementedError()
 
     def is_emptiable(self):
@@ -654,7 +650,13 @@ class XsdType(XsdComponent):
 
     def has_simple_content(self):
         """
-        Returns `True` if the instance is a simpleType or a complexType with simple
+        Returns `True` if the instance has a simple content, `False` otherwise.
+        """
+        raise NotImplementedError()
+
+    def has_complex_content(self):
+        """
+        Returns `True` if the instance is a complexType with mixed or element-only
         content, `False` otherwise.
         """
         raise NotImplementedError()
@@ -698,7 +700,8 @@ class XsdType(XsdComponent):
 
     def is_dynamic_consistent(self, other):
         return other.name == XSD_ANY_TYPE or self.is_derived(other) or \
-            hasattr(other, 'member_types') and any(self.is_derived(mt) for mt in other.member_types)
+            hasattr(other, 'member_types') and \
+            any(self.is_derived(mt) for mt in other.member_types)  # pragma: no cover
 
     def is_key(self):
         return self.name == XSD_ID or self.is_derived(self.maps.types[XSD_ID])
@@ -706,11 +709,17 @@ class XsdType(XsdComponent):
     def is_qname(self):
         return self.name == XSD_QNAME or self.is_derived(self.maps.types[XSD_QNAME])
 
+    def is_notation(self):
+        return self.name == XSD_NOTATION_TYPE or self.is_derived(self.maps.types[XSD_NOTATION_TYPE])
+
+    def is_decimal(self):
+        return self.name == XSD_DECIMAL or self.is_derived(self.maps.types[XSD_DECIMAL])
+
     def text_decode(self, text):
         raise NotImplementedError()
 
 
-class ValidationMixin(object):
+class ValidationMixin:
     """
     Mixin for implementing XML data validators/decoders. A derived class must implement the
     methods `iter_decode` and `iter_encode`.
@@ -775,7 +784,7 @@ class ValidationMixin(object):
         :param kwargs: optional keyword arguments for the method :func:`iter_decode`.
         :return: a dictionary like object if the XSD component is an element, a \
         group or a complex type; a list if the XSD component is an attribute group; \
-         a simple data type object otherwise. If *validation* argument is 'lax' a 2-items \
+        a simple data type object otherwise. If *validation* argument is 'lax' a 2-items \
         tuple is returned, where the first item is the decoded object and the second item \
         is a list containing the errors.
         :raises: :exc:`XMLSchemaValidationError` if the object is not decodable by \
@@ -784,12 +793,12 @@ class ValidationMixin(object):
         check_validation_mode(validation)
 
         result, errors = None, []
-        for result in self.iter_decode(source, validation, **kwargs):
+        for result in self.iter_decode(source, validation, **kwargs):  # pragma: no cover
             if not isinstance(result, XMLSchemaValidationError):
                 break
             elif validation == 'strict':
                 raise result
-            elif validation == 'lax':
+            else:
                 errors.append(result)
 
         return (result, errors) if validation == 'lax' else result
@@ -811,12 +820,12 @@ class ValidationMixin(object):
         check_validation_mode(validation)
 
         result, errors = None, []
-        for result in self.iter_encode(obj, validation=validation, **kwargs):
+        for result in self.iter_encode(obj, validation=validation, **kwargs):  # pragma: no cover
             if not isinstance(result, XMLSchemaValidationError):
                 break
             elif validation == 'strict':
                 raise result
-            elif validation == 'lax':
+            else:
                 errors.append(result)
 
         return (result, errors) if validation == 'lax' else result
@@ -876,91 +885,3 @@ class ValidationMixin(object):
         if validation == 'strict' and error.elem is not None:
             raise error
         return error
-
-
-class ParticleMixin(object):
-    """
-    Mixin for objects related to XSD Particle Schema Components:
-
-      https://www.w3.org/TR/2012/REC-xmlschema11-1-20120405/structures.html#p
-      https://www.w3.org/TR/2012/REC-xmlschema11-1-20120405/structures.html#t
-    """
-    min_occurs = 1
-    max_occurs = 1
-
-    @property
-    def occurs(self):
-        return [self.min_occurs, self.max_occurs]
-
-    @property
-    def effective_min_occurs(self):
-        return self.min_occurs
-
-    @property
-    def effective_max_occurs(self):
-        return self.max_occurs
-
-    def is_emptiable(self):
-        return self.min_occurs == 0
-
-    def is_empty(self):
-        return self.max_occurs == 0
-
-    def is_single(self):
-        return self.max_occurs == 1
-
-    def is_ambiguous(self):
-        return self.min_occurs != self.max_occurs
-
-    def is_univocal(self):
-        return self.min_occurs == self.max_occurs
-
-    def is_missing(self, occurs):
-        return not self.is_emptiable() if occurs == 0 else self.min_occurs > occurs
-
-    def is_over(self, occurs):
-        return self.max_occurs is not None and self.max_occurs <= occurs
-
-    def has_occurs_restriction(self, other):
-        if self.min_occurs == self.max_occurs == 0:
-            return True
-        elif self.min_occurs < other.min_occurs:
-            return False
-        elif other.max_occurs is None:
-            return True
-        elif self.max_occurs is None:
-            return False
-        else:
-            return self.max_occurs <= other.max_occurs
-
-    def parse_error(self, message):
-        raise XMLSchemaParseError(self, message)
-
-    def _parse_particle(self, elem):
-        if 'minOccurs' in elem.attrib:
-            try:
-                min_occurs = int(elem.attrib['minOccurs'])
-            except (TypeError, ValueError):
-                self.parse_error("minOccurs value is not an integer value")
-            else:
-                if min_occurs < 0:
-                    self.parse_error("minOccurs value must be a non negative integer")
-                else:
-                    self.min_occurs = min_occurs
-
-        max_occurs = elem.get('maxOccurs')
-        if max_occurs is None:
-            if self.min_occurs > 1:
-                self.parse_error("minOccurs must be lesser or equal than maxOccurs")
-        elif max_occurs == 'unbounded':
-            self.max_occurs = None
-        else:
-            try:
-                max_occurs = int(max_occurs)
-            except ValueError:
-                self.parse_error("maxOccurs value must be a non negative integer or 'unbounded'")
-            else:
-                if self.min_occurs > max_occurs:
-                    self.parse_error("maxOccurs must be 'unbounded' or greater than minOccurs")
-                else:
-                    self.max_occurs = max_occurs

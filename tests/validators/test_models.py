@@ -11,11 +11,13 @@
 """Tests concerning model groups validation"""
 import unittest
 import os.path
+from textwrap import dedent
 
 from xmlschema import XMLSchema10, XMLSchema11
-from xmlschema.validators import XsdElement, ModelVisitor
-from xmlschema.compat import ordered_dict_class
-from xmlschema.testing import print_test_header, XsdValidatorTestCase
+from xmlschema.validators import XsdElement, ModelVisitor, XMLSchemaValidationError
+from xmlschema.validators.particles import ParticleMixin, ModelGroup
+from xmlschema.validators.models import distinguishable_paths
+from xmlschema.testing import XsdValidatorTestCase
 
 
 class TestModelValidation(XsdValidatorTestCase):
@@ -40,11 +42,12 @@ class TestModelValidation(XsdValidatorTestCase):
 
     def check_advance_false(self, model, expected=None):
         """
-        Advances a model with a no-match condition and checks the expected error list or  or exception.
+        Advances a model with a no-match condition and checks the
+        expected error list or  or exception.
 
         :param model: an ModelGroupVisitor instance.
-        :param expected: can be an exception class or a list. Leaving `None` means that an empty \
-        list is expected.
+        :param expected: can be an exception class or a list. Leaving `None` means that \
+        an empty list is expected.
         """
         if isinstance(expected, type) and issubclass(expected, Exception):
             self.assertRaises(expected, lambda x: list(model.advance(x)), False)
@@ -78,11 +81,36 @@ class TestModelValidation(XsdValidatorTestCase):
         else:
             self.assertEqual([e for e in model.stop()], expected or [])
 
+    # --- ModelVisitor methods ---
+
+    def test_iter_group(self):
+        group = ModelGroup('sequence', min_occurs=0, max_occurs=0)
+        model = ModelVisitor(group)
+        self.assertListEqual(list(model.items), [])
+
+        group = ModelGroup('choice')
+        group.append(ParticleMixin())
+        group.append(ParticleMixin())
+        group.append(ParticleMixin())
+
+        model = ModelVisitor(group)
+        model.occurs[group[1]] = 1
+        self.assertListEqual(list(model.items), group[1:])
+
+        group = ModelGroup('all')
+        group.append(ParticleMixin())
+        group.append(ParticleMixin())
+        group.append(ParticleMixin())
+
+        model = ModelVisitor(group)
+        model.occurs[group[1]] = 1
+        self.assertListEqual(list(model.items), group[2:])
+
     # --- Vehicles schema ---
 
     def test_vehicles_model(self):
         # Sequence with two not-emptiable single-occurs elements
-        group = self.vh_schema.elements['vehicles'].type.content_type
+        group = self.vh_schema.elements['vehicles'].type.content
 
         model = ModelVisitor(group)
         self.check_advance_true(model)                # <cars>
@@ -97,7 +125,7 @@ class TestModelValidation(XsdValidatorTestCase):
 
     def test_cars_model(self):
         # Emptiable 1:1 sequence with one emptiable and unlimited element.
-        group = self.vh_schema.elements['cars'].type.content_type
+        group = self.vh_schema.elements['cars'].type.content
 
         model = ModelVisitor(group)
         self.check_advance_true(model)     # <car>
@@ -114,7 +142,7 @@ class TestModelValidation(XsdValidatorTestCase):
 
     def test_collection_model(self):
         # Sequence with one not-emptiable and unlimited element.
-        group = self.col_schema.elements['collection'].type.content_type
+        group = self.col_schema.elements['collection'].type.content
 
         model = ModelVisitor(group)
         self.check_advance_true(model)     # <car>
@@ -130,7 +158,7 @@ class TestModelValidation(XsdValidatorTestCase):
 
     def test_person_type_model(self):
         # Sequence with four single elements, last two are also emptiable.
-        group = self.col_schema.types['personType'].content_type
+        group = self.col_schema.types['personType'].content
 
         model = ModelVisitor(group)
         self.check_advance_true(model)     # <name>
@@ -167,24 +195,25 @@ class TestModelValidation(XsdValidatorTestCase):
         group = XMLSchema10.meta_schema.groups['simpleDerivation']
 
         model = ModelVisitor(group)
-        self.check_advance_true(model)     # <restriction> match
+        self.check_advance_true(model)     # <restriction> matches
         self.assertIsNone(model.element)
 
         model = ModelVisitor(group)
-        self.check_advance_false(model)    # <list> not match with <restriction>
-        self.check_advance_true(model)     # <list> match
+        self.check_advance_false(model)    # <list> doesn't match with <restriction>
+        self.check_advance_true(model)     # <list> matches
         self.assertIsNone(model.element)
 
         model = ModelVisitor(group)
-        self.check_advance_false(model)    # <union> not match with <restriction>
-        self.check_advance_false(model)    # <union> not match with <list>
-        self.check_advance_true(model)     # <union> match
+        self.check_advance_false(model)    # <union> doesn't match with <restriction>
+        self.check_advance_false(model)    # <union> doesn't match with <list>
+        self.check_advance_true(model)     # <union> matches
         self.assertIsNone(model.element)
 
         model = ModelVisitor(group)
-        self.check_advance_false(model)                          # <other> not match with <restriction>
-        self.check_advance_false(model)                          # <other> not match with <list>
-        self.check_advance_false(model, [(group, 0, group[:])])  # <other> not match with <union>
+        self.check_advance_false(model)  # <other> doesn't match with <restriction>
+        self.check_advance_false(model)  # <other> doesn't match with <list>
+        self.check_advance_false(model,
+                                 [(group, 0, group[:])])  # <other> doesn't match with <union>
         self.assertIsNone(model.element)
 
     def test_meta_simple_restriction_model(self):
@@ -232,16 +261,16 @@ class TestModelValidation(XsdValidatorTestCase):
 
         if self.schema_class.XSD_VERSION == '1.0':
             self.assertEqual(model.element, group[0])
-            self.check_advance_true(model)      # <simpleType> match
+            self.check_advance_true(model)      # <simpleType> matches
             self.assertEqual(model.element, group[1][0][0])
-            self.check_advance_false(model)     # <maxExclusive> do not match
+            self.check_advance_false(model)     # <maxExclusive> does not match
             self.assertEqual(model.element, group[1][0][1])
-            self.check_advance_false(model)     # <maxExclusive> do not match
+            self.check_advance_false(model)     # <maxExclusive> does not match
             self.assertEqual(model.element, group[1][0][2])
-            self.check_advance_true(model)      # <maxExclusive> match
+            self.check_advance_true(model)      # <maxExclusive> matches
             self.assertEqual(model.element, group[1][0][0])
             for _ in range(12):
-                self.check_advance_false(model)  # no match for all the inner choice group "xs:facets"
+                self.check_advance_false(model)  # no match for the inner choice group "xs:facets"
             self.assertIsNone(model.element)
 
     def test_meta_schema_top_model(self):
@@ -268,40 +297,41 @@ class TestModelValidation(XsdValidatorTestCase):
 
         model = ModelVisitor(group)
         self.assertEqual(model.element, group[0][0][0])
-        self.check_advance_false(model)                 # <simpleType> don't match
+        self.check_advance_false(model)                 # <simpleType> doesn't match
         self.assertEqual(model.element, group[0][0][1])
-        self.check_advance_true(model)                  # <complexType> match
+        self.check_advance_true(model)                  # <complexType> matches
         self.assertIsNone(model.element)
 
         model.restart()
         self.assertEqual(model.element, group[0][0][0])
-        self.check_advance_false(model)                 # <simpleType> don't match
+        self.check_advance_false(model)                 # <simpleType> doesn't match
         self.assertEqual(model.element, group[0][0][1])
-        self.check_advance_false(model)                 # <complexType> don't match
+        self.check_advance_false(model)                 # <complexType> doesn't match
         self.assertEqual(model.element, group[0][0][2])
-        self.check_advance_false(model)                 # <group> don't match
+        self.check_advance_false(model)                 # <group> doesn't match
         self.assertEqual(model.element, group[0][0][3])
-        self.check_advance_false(model)                 # <attributeGroup> don't match
+        self.check_advance_false(model)                 # <attributeGroup> doesn't match
         self.assertEqual(model.element, group[1])
-        self.check_advance_false(model)                 # <element> don't match
+        self.check_advance_false(model)                 # <element> doesn't match
         self.assertEqual(model.element, group[2])
-        self.check_advance_false(model)                 # <attribute> don't match
+        self.check_advance_false(model)                 # <attribute> doesn't match
         self.assertEqual(model.element, group[3])
-        self.check_advance_false(model, [(group, 0, group[0][0][:] + group[1:])])  # <notation> don't match
+        self.check_advance_false(
+            model, [(group, 0, group[0][0][:] + group[1:])])  # <notation> doesn't match
 
         model.restart()
         self.assertEqual(model.element, group[0][0][0])
-        self.check_advance_false(model)                 # <simpleType> don't match
+        self.check_advance_false(model)                 # <simpleType> doesn't match
         self.assertEqual(model.element, group[0][0][1])
-        self.check_advance_false(model)                 # <complexType> don't match
+        self.check_advance_false(model)                 # <complexType> doesn't match
         self.assertEqual(model.element, group[0][0][2])
-        self.check_advance_false(model)                 # <group> don't match
+        self.check_advance_false(model)                 # <group> doesn't match
         self.assertEqual(model.element, group[0][0][3])
-        self.check_advance_false(model)                 # <attributeGroup> don't match
+        self.check_advance_false(model)                 # <attributeGroup> doesn't match
         self.assertEqual(model.element, group[1])
-        self.check_advance_false(model)                 # <element> don't match
+        self.check_advance_false(model)                 # <element> doesn't match
         self.assertEqual(model.element, group[2])
-        self.check_advance_true(model)                  # <attribute> match
+        self.check_advance_true(model)                  # <attribute> doesn't match
         self.assertIsNone(model.element)
 
     def test_meta_attr_declarations_group(self):
@@ -378,31 +408,31 @@ class TestModelValidation(XsdValidatorTestCase):
 
         model = ModelVisitor(group)
         self.assertEqual(model.element, group[0])
-        self.check_advance_true(model)                  # <simpleContent> match
+        self.check_advance_true(model)                  # <simpleContent> matches
         self.assertIsNone(model.element)
 
         model.restart()
         self.assertEqual(model.element, group[0])
         self.check_advance_false(model)
-        self.check_advance_true(model)                  # <complexContent> match
+        self.check_advance_true(model)                  # <complexContent> matches
         self.assertIsNone(model.element)
 
         if self.schema_class.XSD_VERSION == '1.0':
             model.restart()
             self.assertEqual(model.element, group[0])
             for match in [False, False, False, False, True]:
-                self.check_advance(model, match)            # <all> match
+                self.check_advance(model, match)            # <all> matches
             self.check_stop(model)
             self.assertIsNone(model.element)
 
             model.restart()
             self.assertEqual(model.element, group[0])
             for match in [False, False, False, False, True, False, True, False, False, False]:
-                self.check_advance(model, match)            # <all> match, <attributeGroup> match
+                self.check_advance(model, match)            # <all> and <attributeGroup> match
             self.assertIsNone(model.element)
 
     def test_meta_schema_document_model(self):
-        group = self.schema_class.meta_schema.elements['schema'].type.content_type
+        group = self.schema_class.meta_schema.elements['schema'].type.content
 
         # A schema model with a wrong tag
         model = ModelVisitor(group)
@@ -488,13 +518,13 @@ class TestModelValidation(XsdValidatorTestCase):
         self.assertIsNone(model.element)
 
     def test_model_group7(self):
-        group = self.models_schema.types['complexType7'].content_type
+        group = self.models_schema.types['complexType7'].content
 
         model = ModelVisitor(group)
         self.assertEqual(model.element, group[0][0])
         self.check_stop(model, [(group[0][0], 0, [group[0][0]])])
 
-        group = self.models_schema.types['complexType7_emptiable'].content_type
+        group = self.models_schema.types['complexType7_emptiable'].content
 
         model = ModelVisitor(group)
         self.assertEqual(model.element, group[0][0])
@@ -538,10 +568,100 @@ class TestModelValidation(XsdValidatorTestCase):
         </xs:schema>""")
 
         xml_data = "<root><elem1/></root>"
-        model = ModelVisitor(schema.elements['root'].type.content_type)
+        model = ModelVisitor(schema.elements['root'].type.content)
         self.assertIsInstance(model.element, XsdElement)
         self.assertEqual(model.element.name, 'elem1')
         self.assertIsNone(schema.validate(xml_data))
+
+        # W3C test group 'complex022'
+        schema = self.schema_class("""<?xml version="1.0" encoding="utf-8"?>
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="root">
+                <xs:complexType>
+                    <xs:choice/>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>""")
+
+        reason = "an empty 'choice' group with minOccurs > 0 cannot validate any content"
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.validate("<root><elem1/></root>")
+        self.assertIn(reason, str(ctx.exception))
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.validate("<root/>")
+        self.assertIn(reason, str(ctx.exception))
+
+    def test_single_item_groups(self):
+        schema = self.schema_class("""<?xml version="1.0"?>
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="a1">
+                <xs:complexType>
+                    <xs:choice>
+                        <xs:any maxOccurs="2" processContents="lax"/>
+                    </xs:choice>
+                </xs:complexType>                
+            </xs:element>
+            <xs:element name="a2">
+                <xs:complexType>
+                    <xs:choice>
+                        <xs:any maxOccurs="2" processContents="strict"/>
+                    </xs:choice>
+                </xs:complexType>                
+            </xs:element>
+            <xs:element name="a3">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:any maxOccurs="2" processContents="lax"/>
+                    </xs:sequence>
+                </xs:complexType>                
+            </xs:element>
+            <xs:element name="a4">
+                <xs:complexType>
+                    <xs:choice>
+                        <xs:element name="b" maxOccurs="2"/>
+                    </xs:choice>
+                </xs:complexType>                
+            </xs:element>
+            <xs:element name="a5">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="b" maxOccurs="2"/>
+                    </xs:sequence>
+                </xs:complexType>                
+            </xs:element>
+            <xs:element name="b"/>
+        </xs:schema>""")
+
+        self.assertFalse(schema.is_valid('<a1></a1>'))
+        self.assertFalse(schema.is_valid('<a2></a2>'))
+        self.assertFalse(schema.is_valid('<a3></a3>'))
+        self.assertFalse(schema.is_valid('<a4></a4>'))
+        self.assertFalse(schema.is_valid('<a5></a5>'))
+
+        self.assertTrue(schema.is_valid('<a1><c/></a1>'))
+        self.assertFalse(schema.is_valid('<a2><c/></a2>'))
+        self.assertTrue(schema.is_valid('<a3><c/></a3>'))
+        self.assertFalse(schema.is_valid('<a4><c/></a4>'))
+        self.assertFalse(schema.is_valid('<a5><c/></a5>'))
+
+        self.assertTrue(schema.is_valid('<a1><b/></a1>'))
+        self.assertTrue(schema.is_valid('<a2><b/></a2>'))
+        self.assertTrue(schema.is_valid('<a3><b/></a3>'))
+        self.assertTrue(schema.is_valid('<a4><b/></a4>'))
+        self.assertTrue(schema.is_valid('<a5><b/></a5>'))
+
+        self.assertTrue(schema.is_valid('<a1><b/><b/></a1>'))
+        self.assertTrue(schema.is_valid('<a2><b/><b/></a2>'))
+        self.assertTrue(schema.is_valid('<a3><b/><b/></a3>'))
+        self.assertTrue(schema.is_valid('<a4><b/><b/></a4>'))
+        self.assertTrue(schema.is_valid('<a5><b/><b/></a5>'))
+
+        self.assertFalse(schema.is_valid('<a1><b/><b/><b/></a1>'))
+        self.assertFalse(schema.is_valid('<a2><b/><b/><b/></a2>'))
+        self.assertFalse(schema.is_valid('<a3><b/><b/><b/></a3>'))
+        self.assertFalse(schema.is_valid('<a4><b/><b/><b/></a4>'))
+        self.assertFalse(schema.is_valid('<a5><b/><b/><b/></a5>'))
 
     def test_sequence_model_with_extended_occurs(self):
         schema = self.schema_class(
@@ -655,12 +775,31 @@ class TestModelValidation(XsdValidatorTestCase):
 
         self.assertIsNone(schema.validate('<root><a/><a/><a/></root>'))
 
+    def test_emptiable_all_model(self):
+        schema = self.schema_class(dedent(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="root">
+                    <xs:complexType>
+                        <xs:all minOccurs="0">
+                            <xs:element name="a" />
+                            <xs:element name="b" />
+                        </xs:all>
+                    </xs:complexType>
+                </xs:element>
+            </xs:schema>
+            """))
+
+        self.assertIsNone(schema.validate('<root><b/><a/></root>'))
+        self.assertIsNone(schema.validate('<root/>'))
+        self.assertFalse(schema.is_valid('<root><b/></root>'))
+
     #
     # Tests on issues
     def test_issue_086(self):
         issue_086_xsd = self.casepath('issues/issue_086/issue_086.xsd')
         schema = self.schema_class(issue_086_xsd)
-        group = schema.types['Foo'].content_type
+        group = schema.types['Foo'].content
 
         # issue_086-1.xml sequence simulation
         model = ModelVisitor(group)
@@ -826,12 +965,21 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             </xs:complexType>
             """)
 
-        model = ModelVisitor(schema.types['A_type'].content_type)
+        model = ModelVisitor(schema.types['A_type'].content)
 
+        self.assertListEqual(
+            model.sort_content([('B2', 10), ('B1', 'abc'), ('B3', True)], restart=False),
+            [('B1', 'abc'), ('B2', 10), ('B3', True)]
+        )
         self.assertListEqual(
             model.sort_content([('B2', 10), ('B1', 'abc'), ('B3', True)]),
             [('B1', 'abc'), ('B2', 10), ('B3', True)]
         )
+        self.assertListEqual(
+            model.sort_content([('B2', 10), ('B1', 'abc'), ('B3', True)], restart=False),
+            [('B2', 10), ('B1', 'abc'), ('B3', True)]
+        )
+
         self.assertListEqual(
             model.sort_content([('B3', True), ('B2', 10), ('B1', 'abc')]),
             [('B1', 'abc'), ('B2', 10), ('B3', True)]
@@ -840,23 +988,37 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             model.sort_content([('B2', 10), ('B4', None), ('B1', 'abc'), ('B3', True)]),
             [('B1', 'abc'), ('B2', 10), ('B3', True), ('B4', None)]
         )
+
         content = [('B2', 10), ('B4', None), ('B1', 'abc'), (1, 'hello'), ('B3', True)]
         self.assertListEqual(
             model.sort_content(content),
             [(1, 'hello'), ('B1', 'abc'), ('B2', 10), ('B3', True), ('B4', None)]
         )
-        content = [(2, 'world!'), ('B2', 10), ('B4', None), ('B1', 'abc'), (1, 'hello'), ('B3', True)]
+
+        content = [
+            (2, 'world!'), ('B2', 10), ('B4', None), ('B1', 'abc'), (1, 'hello'), ('B3', True)
+        ]
         self.assertListEqual(
             model.sort_content(content),
             [(1, 'hello'), ('B1', 'abc'), (2, 'world!'), ('B2', 10), ('B3', True), ('B4', None)]
         )
 
+        content = [
+            ('B2', 10), ('B4', None), ('B1', 'abc'), ('B3', True), (6, 'six'),
+            (5, 'five'), (4, 'four'), (2, 'two'), (3, 'three'), (1, 'one')
+        ]
+        self.assertListEqual(
+            model.sort_content(content),
+            [(1, 'one'), ('B1', 'abc'), (2, 'two'), ('B2', 10), (3, 'three'),
+             ('B3', True), (4, 'four'), ('B4', None), (5, 'five'), (6, 'six')]
+        )
+
         # With a dict-type argument
-        content = ordered_dict_class([('B2', [10]), ('B1', ['abc']), ('B3', [True])])
+        content = dict([('B2', [10]), ('B1', ['abc']), ('B3', [True])])
         self.assertListEqual(
             model.sort_content(content), [('B1', 'abc'), ('B2', 10), ('B3', True)]
         )
-        content = ordered_dict_class([('B2', [10]), ('B1', ['abc']), ('B3', [True]), (1, 'hello')])
+        content = dict([('B2', [10]), ('B1', ['abc']), ('B3', [True]), (1, 'hello')])
         self.assertListEqual(
             model.sort_content(content), [(1, 'hello'), ('B1', 'abc'), ('B2', 10), ('B3', True)]
         )
@@ -892,7 +1054,7 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             </xs:complexType>
             """)
 
-        model = ModelVisitor(schema.types['A_type'].content_type)
+        model = ModelVisitor(schema.types['A_type'].content)
 
         content = [('B3', 10), ('B4', None), ('B5', True), ('B6', 'alpha'), ('B7', 20)]
         model.restart()
@@ -922,7 +1084,7 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             </xs:complexType>
             """)
 
-        model = ModelVisitor(schema.types['A_type'].content_type)
+        model = ModelVisitor(schema.types['A_type'].content)
 
         content = [
             ('B3', 10), ('B4', None), ('B5', True), ('B5', False), ('B6', 'alpha'), ('B7', 20)
@@ -955,7 +1117,7 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             </xs:complexType>
             """)
 
-        model = ModelVisitor(schema.types['A_type'].content_type)
+        model = ModelVisitor(schema.types['A_type'].content)
 
         content = [('B1', 1), ('B1', 2), ('B2', 3), ('B2', 4)]
         self.assertListEqual(
@@ -1002,7 +1164,7 @@ class TestModelBasedSorting(XsdValidatorTestCase):
             </xs:complexType>
             """)
 
-        model = ModelVisitor(schema.types['A_type'].content_type)
+        model = ModelVisitor(schema.types['A_type'].content)
 
         content = [('B1', 'abc'), ('B2', 10), ('B3', False)]
         model.restart()
@@ -1032,6 +1194,76 @@ class TestModelBasedSorting(XsdValidatorTestCase):
         self.assertListEqual(list(model.iter_collapsed_content(content)), content)
 
 
+class TestModelPaths(unittest.TestCase):
+
+    def test_distinguishable_paths_one_level(self):
+        group = ModelGroup('sequence', min_occurs=0)
+        group.append(ModelGroup('sequence'))
+        group.append(ModelGroup('sequence'))
+        group[0].append(ParticleMixin())
+        group[1].append(ParticleMixin())
+
+        path1 = [group[0]]
+        path2 = [group[1]]
+        self.assertTrue(distinguishable_paths(path1, path2))  # Disjoined paths
+        self.assertTrue(distinguishable_paths(path1, []))
+
+        with self.assertRaises(IndexError):
+            distinguishable_paths([], path2)  # path1 cannot be empty
+
+        path1 = [group, group[0]]
+        path2 = [group, group[1]]
+        self.assertTrue(distinguishable_paths(path1, path2))
+        group[0].min_occurs = 0
+        self.assertFalse(distinguishable_paths(path1, path2))
+        group.max_occurs = 0
+        self.assertTrue(distinguishable_paths(path1, path2))
+
+    def test_distinguishable_paths_two_levels(self):
+        group = ModelGroup('sequence', min_occurs=0)
+        group.append(ModelGroup('choice'))
+        group.append(ModelGroup('choice'))
+        group[0].append(ParticleMixin())
+        group[0].append(ParticleMixin())
+        group[1].append(ParticleMixin())
+        group[1].append(ParticleMixin())
+
+        path1 = [group, group[0], group[0][0]]
+        path2 = [group, group[1], group[1][0]]
+        self.assertTrue(distinguishable_paths(path1, path2))  # All univocal subgroups
+        group[0].max_occurs = 2
+        self.assertFalse(distinguishable_paths(path1, path2))
+
+        group[0].max_occurs = 1
+        group[0].min_occurs = 0
+        self.assertFalse(distinguishable_paths(path1, path2))
+
+        group.max_occurs = None
+        self.assertFalse(distinguishable_paths(path1, path2))
+
+    def test_distinguishable_paths_three_levels(self):
+        group = ModelGroup('sequence', min_occurs=0)
+        group.append(ModelGroup('choice'))
+        group.append(ModelGroup('choice'))
+        group[0].append(ModelGroup('choice'))
+        group[1].append(ModelGroup('choice'))
+        group[0][0].append(ParticleMixin())
+        group[0][0].append(ParticleMixin())
+        group[1][0].append(ParticleMixin())
+        group[1][0].append(ParticleMixin())
+
+        path1 = [group, group[0], group[0][0], group[0][0][0]]
+        path2 = [group, group[1], group[1][0], group[1][0][0]]
+        self.assertTrue(distinguishable_paths(path1, path2))  # All univocal subgroups
+
+        group[0][0][1].min_occurs = 0
+        self.assertFalse(distinguishable_paths(path1, path2))  # All univocal subgroups
+
+
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema's XSD model groups with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

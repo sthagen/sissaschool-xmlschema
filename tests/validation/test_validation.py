@@ -11,13 +11,19 @@
 import unittest
 import os
 import sys
+import decimal
+
+try:
+    import lxml.etree as lxml_etree
+except ImportError:
+    lxml_etree = None
 
 import xmlschema
 from xmlschema import XMLSchemaValidationError
 
-from xmlschema.etree import ElementTree, lxml_etree
+from xmlschema.etree import ElementTree
 from xmlschema.validators import XMLSchema11
-from xmlschema.testing import XsdValidatorTestCase, print_test_header
+from xmlschema.testing import XsdValidatorTestCase
 
 
 class TestValidation(XsdValidatorTestCase):
@@ -72,7 +78,7 @@ class TestValidation(XsdValidatorTestCase):
             self.assertIsNone(xmlschema.validate(f, schema=self.vh_xsd_file))
 
     def test_document_validate_api_lazy(self):
-        source = xmlschema.XMLResource(self.col_xml_file, lazy=True)
+        source = xmlschema.XMLResource(self.col_xml_file, lazy=False)
         namespaces = source.get_namespaces()
         source.root[0].clear()  # Drop internal elements
         source.root[1].clear()
@@ -129,9 +135,9 @@ class TestValidation(XsdValidatorTestCase):
         self.check_validity(self.st_schema, '<name xmlns="ns"></name>', False)
 
     def test_issue_171(self):
-        # First schema has an assert with naive check that maps '0' to False ('0'--> 0--> false)
+        # First schema has an assert with naive check
         schema = xmlschema.XMLSchema11(self.casepath('issues/issue_171/issue_171.xsd'))
-        self.check_validity(schema, '<tag name="test" abc="10" def="0"/>', True)
+        self.check_validity(schema, '<tag name="test" abc="10" def="0"/>', False)
         self.check_validity(schema, '<tag name="test" abc="10" def="1"/>', False)
         self.check_validity(schema, '<tag name="test" abc="10"/>', True)
 
@@ -140,6 +146,15 @@ class TestValidation(XsdValidatorTestCase):
         self.check_validity(schema, '<tag name="test" abc="10" def="0"/>', False)
         self.check_validity(schema, '<tag name="test" abc="10" def="1"/>', False)
         self.check_validity(schema, '<tag name="test" abc="10"/>', True)
+
+        # Another schema with a simple assert expression to test that EBV of abc/def='0' is True
+        schema = xmlschema.XMLSchema11(self.casepath('issues/issue_171/issue_171c.xsd'))
+        self.check_validity(schema, '<tag name="test" abc="0" def="1"/>', True)
+        self.check_validity(schema, '<tag name="test" abc="1" def="0"/>', True)
+        self.check_validity(schema, '<tag name="test" abc="1" def="1"/>', True)
+        self.check_validity(schema, '<tag name="test" abc="0" def="0"/>', True)
+        self.check_validity(schema, '<tag name="test" abc="1"/>', False)
+        self.check_validity(schema, '<tag name="test" def="1"/>', False)
 
     def test_issue_183(self):
         # Test for issue #183
@@ -172,6 +187,48 @@ class TestValidation(XsdValidatorTestCase):
 
         self.assertEqual(schema.decode(xml_data), 'ns0:elem1')
 
+        schema = self.schema_class("""
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                xmlns="http://xmlschema.test/0"
+                xmlns:tns1="http://xmlschema.test/1"
+                xmlns:tns2="http://xmlschema.test/2"
+                targetNamespace="http://xmlschema.test/0">
+
+                <xs:element name="elem1" type="xs:string"/>
+                <xs:element name="elem2" type="xs:string"/>
+                <xs:element name="elem3" type="xs:string"/>
+                <xs:element name="elem4" type="xs:string"/>
+                
+                <xs:element name="root" type="enumType"/>
+
+                <xs:simpleType name="enumType">
+                    <xs:restriction base="xs:QName">
+                        <xs:enumeration value="elem1"/>
+                        <xs:enumeration value="elem2"/>
+                        <xs:enumeration value="tns1:other1"/>
+                        <xs:enumeration value="elem3"/>
+                        <xs:enumeration value="tns2:other2"/>                        
+                        <xs:enumeration value="elem4"/>
+                    </xs:restriction>
+                </xs:simpleType>
+            </xs:schema>""")
+
+        xml_data = '<ns0:root xmlns:ns0="http://xmlschema.test/0">ns0:elem2</ns0:root>'
+        self.check_validity(schema, xml_data, True)
+
+    def test_issue_213(self):
+        schema = xmlschema.XMLSchema("""
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+        <xs:element name="amount" type="xs:decimal"/>
+        </xs:schema>
+        """)
+
+        xml1 = """<?xml version="1.0" encoding="UTF-8"?><amount>0.000000</amount>"""
+        self.assertIsInstance(schema.decode(xml1), decimal.Decimal)
+
+        xml2 = """<?xml version="1.0" encoding="UTF-8"?><amount>0.0000000</amount>"""
+        self.assertIsInstance(schema.decode(xml2), decimal.Decimal)
+
 
 class TestValidation11(TestValidation):
     schema_class = XMLSchema11
@@ -189,5 +246,9 @@ class TestValidation11(TestValidation):
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema validation with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

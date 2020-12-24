@@ -7,10 +7,10 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
+import threading
 from elementpath import XPath2Parser, XPathContext, ElementPathError
-from elementpath.datatypes import XSD_BUILTIN_TYPES
 
-from ..qnames import XSD_ASSERT
+from ..names import XSD_ASSERT
 from ..xpath import ElementPathMixin, XMLSchemaProxy
 
 from .exceptions import XMLSchemaValidationError
@@ -36,11 +36,28 @@ class XsdAssert(XsdComponent, ElementPathMixin):
 
     def __init__(self, elem, schema, parent, base_type):
         self.base_type = base_type
+        self._assert_xpath_lock = threading.Lock()  # Lock for assertion XPath operations
         super(XsdAssert, self).__init__(elem, schema, parent)
         ElementPathMixin.__init__(self)
 
     def __repr__(self):
-        return '%s(test=%r)' % (self.__class__.__name__, self.path)
+        if len(self.path) < 40:
+            return '%s(test=%r)' % (self.__class__.__name__, self.path)
+        else:
+            return '%s(test=%r)' % (self.__class__.__name__, self.path[:37] + '...')
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('_assert_xpath_lock', None)
+        state.pop('_xpath_lock', None)
+        state.pop('_xpath_parser', None)
+        state.pop('xpath_tokens', None)  # For schema objects
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._xpath_lock = threading.Lock()
+        self._assert_xpath_lock = threading.Lock()
 
     def _parse(self):
         super(XsdAssert, self)._parse()
@@ -50,7 +67,7 @@ class XsdAssert(XsdComponent, ElementPathMixin):
             try:
                 self.path = self.elem.attrib['test'].strip()
             except KeyError as err:
-                self.parse_error(str(err), elem=self.elem)
+                self.parse_error(err)
 
         if 'xpathDefaultNamespace' in self.elem.attrib:
             self.xpath_default_namespace = self._parse_xpath_default_namespace(self.elem)
@@ -61,21 +78,10 @@ class XsdAssert(XsdComponent, ElementPathMixin):
     def built(self):
         return self.token is not None and (self.base_type.parent is None or self.base_type.built)
 
-    def parse_xpath_test(self):
-        # FIXME: parser's variables filled with XSD type with next elementpath minor release
-        if not self.base_type.has_simple_content():
-            variables = {'value': XSD_BUILTIN_TYPES['anyType'].value}
-        else:
-            try:
-                builtin_type_name = self.base_type.content_type.primitive_type.local_name
-            except AttributeError:
-                variables = {'value': XSD_BUILTIN_TYPES['anySimpleType'].value}
-            else:
-                variables = {'value': XSD_BUILTIN_TYPES[builtin_type_name].value}
-
+    def build(self):
         self.parser = XPath2Parser(
             namespaces=self.namespaces,
-            variables=variables,
+            variable_types={'value': self.base_type.sequence_type},
             strict=False,
             default_namespace=self.xpath_default_namespace,
             schema=XMLSchemaProxy(self.schema, self)
@@ -84,42 +90,34 @@ class XsdAssert(XsdComponent, ElementPathMixin):
         try:
             self.token = self.parser.parse(self.path)
         except ElementPathError as err:
-            self.parse_error(err, elem=self.elem)
+            self.parse_error(err)
             self.token = self.parser.parse('true()')
         finally:
-            self.parser.variables.clear()
+            self.parser.variable_types.clear()
 
-    def __call__(self, elem, value=None, source=None, namespaces=None, **kwargs):
-        if not self.parser.is_schema_bound():
-            self.parser.schema.bind_parser(self.parser)
+    def __call__(self, elem, value=None, namespaces=None, source=None, **kwargs):
+        with self._xpath_lock:
+            if not self.parser.is_schema_bound():
+                self.parser.schema.bind_parser(self.parser)
 
-        if value is not None:
-            variables = {'value': self.base_type.text_decode(value)}
+        variables = {'value': None if value is None else self.base_type.text_decode(value)}
+        if source is not None:
+            context = XPathContext(source.root, namespaces=namespaces,
+                                   item=elem, variables=variables)
         else:
-            variables = {'value': ''}
-
-        if source is None:
-            context = XPathContext(root=elem, variables=variables)
-        else:
-            context = XPathContext(root=source.root, item=elem, variables=variables)
-
-        default_namespace = self.parser.namespaces['']
-        if namespaces and '' in namespaces:
-            self.parser.namespaces[''] = namespaces['']
+            # If validated from a component (could not work with rooted XPath expressions)
+            context = XPathContext(elem, variables=variables)
 
         try:
-            if not self.token.evaluate(context.copy()):
-                msg = "expression is not true with test path %r."
-                yield XMLSchemaValidationError(self, obj=elem, reason=msg % self.path)
+            if not self.token.evaluate(context):
+                yield XMLSchemaValidationError(self, obj=elem, reason="assertion test if false")
         except ElementPathError as err:
             yield XMLSchemaValidationError(self, obj=elem, reason=str(err))
-
-        self.parser.namespaces[''] = default_namespace
 
     # For implementing ElementPathMixin
     def __iter__(self):
         if not self.parent.has_simple_content():
-            yield from self.parent.content_type.iter_elements()
+            yield from self.parent.content.iter_elements()
 
     @property
     def attrib(self):

@@ -2,6 +2,61 @@
 CHANGELOG
 *********
 
+`v1.4.0`_ (2020-12-23)
+======================
+* Fix for issues #213, #214, #215 and #218
+* Code cleaning and optimizations on schema components
+* Reducing and grouping helper functions
+
+`v1.3.1`_ (2020-11-10)
+======================
+* Apply patches for packaging (issue #210)
+
+`v1.3.0`_ (2020-11-09)
+======================
+* Drop support for Python 3.5
+* Add XmlDocument and Wsdl11Document classes
+* Refactoring of XMLResource to support ElementTree-like XPath API
+  on both full and lazy modes
+
+`v1.2.5`_ (2020-09-26)
+======================
+* Add schema export API to schema and global maps (issue #187)
+* Fix decoding with lax/skip validation modes (issue #204)
+* Add *keep_unknown* optional argument for *iter_decode()* methods
+
+`v1.2.4`_ (2020-09-13)
+======================
+* Use the regex engine of *elementpath* library
+* Fix and extend tests on xs:assert
+
+`v1.2.3`_ (2020-08-14)
+======================
+* Full coverage of W3C tests (excluding ones for unavailable or unimplemented features)
+* Update and restrict elementpath dependency to v2.0.x
+* Fix check and iteration of empty model group
+* Fix substitution group iteration for local elements
+
+`v1.2.2`_ (2020-06-15)
+======================
+* Fix XPath context for schema nodes
+* Fix XPath parser and context for identities
+
+`v1.2.1`_ (2020-06-12)
+======================
+* Fix content type classification (issue #195)
+* Make sandbox mode more explicit (PR #191)
+* Allow alphanumeric prefixes for the base converter
+* Fix XPath issues with default namespace
+* Fix W3C tests on XSD identities
+
+`v1.2.0`_ (2020-05-28)
+======================
+* Add ColumnarConverter class
+* Add command-line interface utility for document API
+* Fix a stable public API for XSD types, elements and attributes
+* Add security modes for accessing URLs
+
 `v1.1.3`_ (2020-04-28)
 ======================
 * Clean component parsing
@@ -317,3 +372,12 @@ v0.9.6 (2017-05-05)
 .. _v1.1.1: https://github.com/brunato/xmlschema/compare/v1.1.0...v1.1.1
 .. _v1.1.2: https://github.com/brunato/xmlschema/compare/v1.1.1...v1.1.2
 .. _v1.1.3: https://github.com/brunato/xmlschema/compare/v1.1.2...v1.1.3
+.. _v1.2.0: https://github.com/brunato/xmlschema/compare/v1.1.3...v1.2.0
+.. _v1.2.1: https://github.com/brunato/xmlschema/compare/v1.2.0...v1.2.1
+.. _v1.2.2: https://github.com/brunato/xmlschema/compare/v1.2.1...v1.2.2
+.. _v1.2.3: https://github.com/brunato/xmlschema/compare/v1.2.2...v1.2.3
+.. _v1.2.4: https://github.com/brunato/xmlschema/compare/v1.2.3...v1.2.4
+.. _v1.2.5: https://github.com/brunato/xmlschema/compare/v1.2.4...v1.2.5
+.. _v1.3.0: https://github.com/brunato/xmlschema/compare/v1.2.5...v1.3.0
+.. _v1.3.1: https://github.com/brunato/xmlschema/compare/v1.3.0...v1.3.1
+.. _v1.4.0: https://github.com/brunato/xmlschema/compare/v1.3.1...v1.4.0

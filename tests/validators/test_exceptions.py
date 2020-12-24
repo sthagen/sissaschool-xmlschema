@@ -11,11 +11,10 @@
 import unittest
 import os
 import io
-import xml.etree.ElementTree as ElementTree
 import lxml.etree
 
-from xmlschema.testing import print_test_header
 from xmlschema import XMLSchema, XMLResource
+from xmlschema.etree import ElementTree
 from xmlschema.validators.exceptions import XMLSchemaValidatorError, \
     XMLSchemaNotBuiltError, XMLSchemaModelDepthError, XMLSchemaValidationError, \
     XMLSchemaChildrenValidationError
@@ -168,7 +167,7 @@ class TestValidatorExceptions(unittest.TestCase):
         self.assertEqual(lines[-2], "Path: /a")
 
         root = ElementTree.XML('<a><b1/><b2/><b2/><b3/><b3/><b3/></a>')
-        validator = schema.elements['a'].type.content_type
+        validator = schema.elements['a'].type.content
         with self.assertRaises(XMLSchemaChildrenValidationError) as ctx:
             raise XMLSchemaChildrenValidationError(validator, root, 2, validator[1], 2)
 
@@ -216,5 +215,9 @@ class TestValidatorExceptions(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    print_test_header()
+    import platform
+    header_template = "Test xmlschema's validator exceptions with Python {} on {}"
+    header = header_template.format(platform.python_version(), platform.platform())
+    print('{0}\n{1}\n{0}'.format("*" * len(header), header))
+
     unittest.main()

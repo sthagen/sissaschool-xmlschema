@@ -8,59 +8,13 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 """
-This module contains namespace definitions for W3C core standards and namespace related classes.
+This module contains classes for managing maps related to namespaces.
 """
-import os
 import re
 from collections.abc import MutableMapping, Mapping
 
 from .exceptions import XMLSchemaValueError, XMLSchemaTypeError
-from .qnames import get_namespace, local_name
-
-###
-# Namespace URIs
-XSD_NAMESPACE = 'http://www.w3.org/2001/XMLSchema'
-"URI of the XML Schema Definition namespace (xs|xsd)"
-
-XSI_NAMESPACE = 'http://www.w3.org/2001/XMLSchema-instance'
-"URI of the XML Schema Instance namespace (xsi)"
-
-XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace'
-"URI of the XML namespace (xml)"
-
-XHTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
-XHTML_DATATYPES_NAMESPACE = 'http://www.w3.org/1999/xhtml/datatypes/'
-"URIs of the Extensible Hypertext Markup Language namespace (html)"
-
-XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink'
-"URI of the XML Linking Language (XLink)"
-
-XSLT_NAMESPACE = "http://www.w3.org/1999/XSL/Transform"
-"URI of the XSL Transformations namespace (xslt)"
-
-HFP_NAMESPACE = 'http://www.w3.org/2001/XMLSchema-hasFacetAndProperty'
-"URI of the XML Schema has Facet and Property namespace (hfp)"
-
-VC_NAMESPACE = 'http://www.w3.org/2007/XMLSchema-versioning'
-"URI of the XML Schema Versioning namespace (vc)"
-
-
-###
-# Schema location hints
-
-SCHEMAS_DIR = os.path.join(os.path.dirname(__file__), 'validators/schemas/')
-
-LOCATION_HINTS = {
-    # Locally saved schemas
-    HFP_NAMESPACE: os.path.join(SCHEMAS_DIR, 'XMLSchema-hasFacetAndProperty_minimal.xsd'),
-    VC_NAMESPACE: os.path.join(SCHEMAS_DIR, 'XMLSchema-versioning_minimal.xsd'),
-    XLINK_NAMESPACE: os.path.join(SCHEMAS_DIR, 'xlink.xsd'),
-    XHTML_NAMESPACE: os.path.join(SCHEMAS_DIR, 'xhtml1-strict.xsd'),
-
-    # Remote locations: contributors can propose additional official locations
-    # for other namespaces for extending this list.
-    XSLT_NAMESPACE: os.path.join(SCHEMAS_DIR, 'http://www.w3.org/2007/schema-for-xslt20.xsd'),
-}
+from .helpers import get_namespace, local_name
 
 
 ###
@@ -110,18 +64,18 @@ class NamespaceMapper(MutableMapping):
     automatically registered when set. Namespaces can be updated overwriting
     the existing registration or inserted using an alternative prefix.
 
-    :param namespaces: initial data with namespace prefixes and URIs.
-    :param register_namespace: a two-arguments function for registering namespaces \
-    on ElementTree module.
+    :param namespaces: initial data with namespace prefixes and URIs. \
+    The provided dictionary is bound with the instance, otherwise a new \
+    empty dictionary is used.
     :param strip_namespaces: if set to `True` uses name mapping methods that strip \
     namespace information.
     """
-    def __init__(self, namespaces=None, register_namespace=None, strip_namespaces=False):
-        self._namespaces = {}
-        self.register_namespace = register_namespace
+    def __init__(self, namespaces=None, strip_namespaces=False):
+        if namespaces is None:
+            self._namespaces = {}
+        else:
+            self._namespaces = namespaces
         self.strip_namespaces = strip_namespaces
-        if namespaces is not None:
-            self._namespaces.update(namespaces)
 
     def __setattr__(self, name, value):
         if name == 'strip_namespaces':
@@ -129,7 +83,7 @@ class NamespaceMapper(MutableMapping):
                 self.map_qname = self.unmap_qname = self._local_name
             elif getattr(self, 'strip_namespaces', False):
                 self.map_qname = self._map_qname
-                self.unmap_qname = self._map_qname
+                self.unmap_qname = self._unmap_qname
         super(NamespaceMapper, self).__setattr__(name, value)
 
     def __getitem__(self, prefix):
@@ -137,10 +91,6 @@ class NamespaceMapper(MutableMapping):
 
     def __setitem__(self, prefix, uri):
         self._namespaces[prefix] = uri
-        try:
-            self.register_namespace(prefix, uri)
-        except (TypeError, ValueError):
-            pass
 
     def __delitem__(self, prefix):
         del self._namespaces[prefix]

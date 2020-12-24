@@ -11,11 +11,12 @@
 This module contains classes for XML Schema wildcards.
 """
 from ..exceptions import XMLSchemaValueError
-from ..namespaces import XSI_NAMESPACE
-from ..qnames import XSD_ANY, XSD_ANY_ATTRIBUTE, XSD_OPEN_CONTENT, \
-    XSD_DEFAULT_OPEN_CONTENT, XSI_TYPE, get_namespace
+from ..names import XSI_NAMESPACE, XSD_ANY, XSD_ANY_ATTRIBUTE, \
+    XSD_OPEN_CONTENT, XSD_DEFAULT_OPEN_CONTENT, XSI_TYPE
+from ..helpers import get_namespace
 from ..xpath import XMLSchemaProxy, ElementPathMixin
-from .xsdbase import ValidationMixin, XsdComponent, ParticleMixin
+from .xsdbase import ValidationMixin, XsdComponent
+from .particles import ParticleMixin
 
 
 class XsdWildcard(XsdComponent, ValidationMixin):
@@ -134,7 +135,7 @@ class XsdWildcard(XsdComponent, ValidationMixin):
             return False
         elif not name or name[0] == '{':
             return self.is_namespace_allowed(get_namespace(name))
-        elif default_namespace is None:
+        elif not default_namespace:
             return self.is_namespace_allowed('')
         else:
             return self.is_namespace_allowed('') or \
@@ -370,8 +371,8 @@ class XsdAnyElement(XsdWildcard, ParticleMixin, ElementPathMixin):
     _ADMITTED_TAGS = {XSD_ANY}
     precedences = ()
 
-    def __init__(self, elem, schema, parent):
-        super(XsdAnyElement, self).__init__(elem, schema, parent)
+    def __init__(self, elem, schema, parent, maps=None):
+        super(XsdAnyElement, self).__init__(elem, schema, parent, maps)
         ElementPathMixin.__init__(self)
 
     def __repr__(self):
@@ -444,9 +445,9 @@ class XsdAnyElement(XsdWildcard, ParticleMixin, ElementPathMixin):
             except LookupError:
                 if XSI_TYPE in elem.attrib:
                     if self.process_contents == 'lax':
-                        xsd_element = self.schema.create_element(name=elem.tag, nillable='true')
+                        xsd_element = self.maps.validator.create_element(elem.tag, nillable='true')
                     else:
-                        xsd_element = self.schema.create_element(name=elem.tag)
+                        xsd_element = self.maps.validator.create_element(elem.tag)
                     yield from xsd_element.iter_decode(elem, validation, **kwargs)
                 elif validation == 'skip' or self.process_contents == 'lax':
                     yield from self.any_type.iter_decode(elem, validation, **kwargs)
@@ -663,7 +664,7 @@ class Xsd11AnyElement(XsdAnyElement):
         elif not name or name[0] == '{':
             if not self.is_namespace_allowed(get_namespace(name)):
                 return False
-        elif default_namespace is None:
+        elif not default_namespace:
             if not self.is_namespace_allowed(''):
                 return False
         else:
@@ -729,14 +730,15 @@ class Xsd11AnyAttribute(XsdAnyAttribute):
             return False
         elif not name or name[0] == '{':
             namespace = get_namespace(name)
-        elif default_namespace is None:
+        elif not default_namespace:
             namespace = ''
         else:
             name = '{%s}%s' % (default_namespace, name)
             namespace = default_namespace
 
         if '##defined' in self.not_qname and name in self.maps.attributes:
-            return False
+            if self.maps.attributes[name].schema is self.schema:
+                return False
         return name not in self.not_qname and self.is_namespace_allowed(namespace)
 
 
@@ -824,5 +826,6 @@ class XsdDefaultOpenContent(XsdOpenContent):
         if self._parse_child_component(self.elem) is None:
             self.parse_error("a defaultOpenContent declaration cannot be empty")
 
-        if self._parse_boolean_attribute('appliesToEmpty'):
-            self.applies_to_empty = True
+        if 'appliesToEmpty' in self.elem.attrib:
+            if self.elem.attrib['appliesToEmpty'].strip() in {'true', '1'}:
+                self.applies_to_empty = True

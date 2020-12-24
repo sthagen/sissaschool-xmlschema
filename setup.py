@@ -8,51 +8,34 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
-import importlib
-from setuptools import setup
-from setuptools.command.develop import develop
-from setuptools.command.install import install
+from setuptools import setup, find_packages
 
 with open("README.rst") as readme:
     long_description = readme.read()
 
 
-class DevelopCommand(develop):
-
-    def run(self):
-        develop.run(self)
-        print("Post-develop: create Unicode categories JSON file")
-        codepoints_module = importlib.import_module('xmlschema.codepoints')
-        codepoints_module.save_unicode_categories()
-
-
-class InstallCommand(install):
-
-    def run(self):
-        install.run(self)
-        print("Post-install: create Unicode categories JSON file")
-        codepoints_module = importlib.import_module('xmlschema.codepoints')
-        codepoints_module.save_unicode_categories()
-
-
 setup(
     name='xmlschema',
-    version='1.1.3',
-    packages=['xmlschema'],
+    version='1.4.0',
+    packages=find_packages(include=['xmlschema', 'xmlschema.*']),
     include_package_data=True,
-    setup_requires=['elementpath~=1.4.0'],
-    install_requires=['elementpath~=1.4.0'],
-    extra_require={
-        'dev': ['tox', 'coverage', 'lxml', 'elementpath~=1.4.0',
-                'memory_profiler', 'Sphinx', 'sphinx_rtd_theme']
+    entry_points={
+        'console_scripts': [
+            'xmlschema-validate=xmlschema.cli:validate',
+            'xmlschema-xml2json=xmlschema.cli:xml2json',
+            'xmlschema-json2xml=xmlschema.cli:json2xml',
+        ]
     },
-    cmdclass={
-        'develop': DevelopCommand,
-        'install': InstallCommand
+    python_requires='>=3.6',
+    setup_requires=['elementpath>=2.0.4, <3.0.0'],
+    install_requires=['elementpath>=2.0.4, <3.0.0'],
+    extra_require={
+        'dev': ['tox', 'coverage', 'lxml', 'elementpath>=2.0.4, <3.0.0',
+                'memory_profiler', 'Sphinx', 'sphinx_rtd_theme']
     },
     author='Davide Brunato',
     author_email='brunato@sissa.it',
-    url='https://github.com/brunato/xmlschema',
+    url='https://github.com/sissaschool/xmlschema',
     license='MIT',
     license_file='LICENSE',
     description='An XML Schema validator and decoder',
@@ -67,10 +50,10 @@ setup(
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: Implementation :: CPython',
         'Programming Language :: Python :: Implementation :: PyPy',
         'Topic :: Software Development :: Libraries',
