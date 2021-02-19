@@ -132,7 +132,7 @@ The base class `XMLSchemaConverter` is used for defining generic converters.
 The subclasses implement some of the most used `conventions for converting XML
 to JSON data <http://wiki.open311.org/JSON_and_XML_Conversion/>`_.
 
-.. autoclass:: xmlschema.converters.ElementData
+.. autoclass:: xmlschema.ElementData
 
 .. autoclass:: xmlschema.XMLSchemaConverter
 
@@ -160,6 +160,16 @@ to JSON data <http://wiki.open311.org/JSON_and_XML_Conversion/>`_.
 .. autoclass:: xmlschema.JsonMLConverter
 
 .. autoclass:: xmlschema.ColumnarConverter
+
+
+.. _data-objects-api:
+
+Data objects API
+================
+
+.. autoclass:: xmlschema.DataElement
+.. autoclass:: xmlschema.DataElementConverter
+.. autoclass:: xmlschema.DataBindingConverter
 
 
 .. _xml-resource-api:
@@ -199,15 +209,6 @@ XML resources API
     .. automethod:: get_locations
 
 .. autoclass:: xmlschema.XmlDocument
-
-.. autoclass:: xmlschema.wsdl.Wsdl11Document
-
-    .. autoattribute:: messages
-    .. autoattribute:: port_types
-    .. autoattribute:: bindings
-    .. autoattribute:: services
-
-
 
 
 .. _xpath-api:
@@ -383,3 +384,39 @@ Others
 .. autoclass:: xmlschema.validators.XsdAlternative
 .. autoclass:: xmlschema.validators.XsdNotation
 .. autoclass:: xmlschema.validators.XsdAnnotation
+
+
+.. _extra-api:
+
+Extra features API
+==================
+
+Code generators
+---------------
+
+.. autoclass:: xmlschema.extras.codegen.AbstractGenerator
+
+    .. autoattribute:: xsd_file
+    .. automethod:: register_filter
+    .. automethod:: register_test
+    .. automethod:: map_type
+    .. automethod:: list_templates
+    .. automethod:: matching_templates
+    .. automethod:: get_template
+    .. automethod:: select_template
+    .. automethod:: render
+    .. automethod:: render_to_files
+
+
+.. autoclass:: xmlschema.extras.codegen.PythonGenerator
+
+
+WSDL 1.1 documents
+------------------
+
+.. autoclass:: xmlschema.extras.wsdl.Wsdl11Document
+
+    .. autoattribute:: messages
+    .. autoattribute:: port_types
+    .. autoattribute:: bindings
+    .. autoattribute:: services

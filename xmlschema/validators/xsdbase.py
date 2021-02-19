@@ -19,6 +19,7 @@ from ..names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, XML_LANG, \
     XSD_OVERRIDE, XSD_NOTATION_TYPE, XSD_DECIMAL
 from ..etree import is_etree_element, etree_tostring
 from ..helpers import get_qname, local_name, get_prefixed_qname
+from .. import dataobjects
 from .exceptions import XMLSchemaParseError, XMLSchemaValidationError
 
 XSD_TYPE_DERIVATIONS = {'extension', 'restriction'}
@@ -442,6 +443,39 @@ class XsdComponent(XsdValidator):
         """
         return self if self.is_matching(name, default_namespace, **kwargs) else None
 
+    def get_matching_item(self, mapping, ns_prefix='xmlns', match_local_name=False):
+        """
+        If a key is matching component name, returns its value, otherwise returns `None`.
+        """
+        if self.name is None:
+            return
+        elif not self.target_namespace:
+            return mapping.get(self.name)
+        elif self.qualified_name in mapping:
+            return mapping[self.qualified_name]
+        elif self.prefixed_name in mapping:
+            return mapping[self.prefixed_name]
+
+        # Try a match with other prefixes
+        target_namespace = self.target_namespace
+        suffix = ':%s' % self.local_name
+
+        for k in filter(lambda x: x.endswith(suffix), mapping):
+            prefix = k.split(':')[0]
+            if self.namespaces.get(prefix) == target_namespace:
+                return mapping[k]
+
+            # Match namespace declaration within value
+            ns_declaration = '{}:{}'.format(ns_prefix, prefix)
+            try:
+                if mapping[k][ns_declaration] == target_namespace:
+                    return mapping[k]
+            except (KeyError, TypeError):
+                pass
+        else:
+            if match_local_name:
+                return mapping.get(self.local_name)
+
     def get_global(self):
         """Returns the global XSD component that contains the component instance."""
         if self.parent is None:
@@ -734,14 +768,14 @@ class ValidationMixin:
         for an attribute or a simple type validators, or an ElementTree's Element otherwise.
         :param use_defaults: indicates whether to use default values for filling missing data.
         :param namespaces: is an optional mapping from namespace prefix to URI.
-        :raises: :exc:`XMLSchemaValidationError` if XML *data* instance is not a valid.
+        :raises: :exc:`XMLSchemaValidationError` if XML *data* instance is not valid.
         """
         for error in self.iter_errors(source, use_defaults=use_defaults, namespaces=namespaces):
             raise error
 
     def is_valid(self, source, use_defaults=True, namespaces=None):
         """
-        Like :meth:`validate` except that do not raises an exception but returns ``True`` if
+        Like :meth:`validate` except that does not raise an exception but returns ``True`` if
         the XML document is valid, ``False`` if it's invalid.
 
         :param source: the source of XML data. For a schema can be a path \
@@ -803,6 +837,24 @@ class ValidationMixin:
 
         return (result, errors) if validation == 'lax' else result
 
+    def to_objects(self, source, with_bindings=False, **kwargs):
+        """
+        Decodes XML data to Python data objects.
+
+        :param source: the XML data. Can be a string for an attribute or for a simple \
+        type components or a dictionary for an attribute group or an ElementTree's \
+        Element for other components.
+        :param with_bindings: if `True` is provided the decoding is done using \
+        :class:`DataBindingConverter` that used XML data binding classes. For \
+        default the objects are intances of :class:`DataElement` and uses the \
+        :class:`DataElementConverter`.
+        :param kwargs: other optional keyword arguments for the method \
+        :func:`iter_decode`, except the argument *converter*.
+        """
+        if with_bindings:
+            return self.decode(source, converter=dataobjects.DataBindingConverter, **kwargs)
+        return self.decode(source, converter=dataobjects.DataElementConverter, **kwargs)
+
     def encode(self, obj, validation='strict', **kwargs):
         """
         Encodes data to XML.
@@ -818,7 +870,6 @@ class ValidationMixin:
         component, or also if it's invalid when ``validation='strict'`` is provided.
         """
         check_validation_mode(validation)
-
         result, errors = None, []
         for result in self.iter_encode(obj, validation=validation, **kwargs):  # pragma: no cover
             if not isinstance(result, XMLSchemaValidationError):
@@ -844,7 +895,7 @@ class ValidationMixin:
 
     def iter_encode(self, obj, validation='lax', **kwargs):
         """
-        Creates an iterator for Encode data to an Element.
+        Creates an iterator for encoding data to an Element tree.
 
         :param obj: The data that has to be encoded.
         :param validation: The validation mode. Can be 'lax', 'strict' or 'skip'.

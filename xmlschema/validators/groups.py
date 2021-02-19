@@ -11,18 +11,18 @@
 This module contains classes for XML Schema model groups.
 """
 import warnings
+from collections.abc import MutableMapping, MutableSequence
 
 from .. import limits
 from ..exceptions import XMLSchemaValueError
 from ..names import XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE, XSD_ELEMENT, \
     XSD_ANY, XSI_TYPE, XSD_ANY_TYPE, XSD_ANNOTATION
 from ..etree import etree_element
-from ..helpers import get_qname, local_name
+from ..helpers import get_qname, local_name, not_whitespace, raw_xml_encode
 
 from .exceptions import XMLSchemaModelError, XMLSchemaModelDepthError, \
     XMLSchemaValidationError, XMLSchemaChildrenValidationError, \
     XMLSchemaTypeTableWarning
-from .helpers import not_whitespace
 from .xsdbase import ValidationMixin, XsdComponent, XsdType
 from .particles import ParticleMixin, ModelGroup
 from .elements import XsdElement
@@ -794,7 +794,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
         """
         level = kwargs['level'] = kwargs.get('level', 0) + 1
         errors = []
-        text = element_data.text
+        text = raw_xml_encode(element_data.text)
         children = []
         try:
             indent = kwargs['indent']
@@ -812,12 +812,13 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
         model = ModelVisitor(self)
         index = cdata_index = 0
         wrong_content_type = False
+        over_max_depth = 'max_depth' in kwargs and kwargs['max_depth'] <= level
 
         if element_data.content is None:
             content = []
-        elif isinstance(element_data.content, dict) or kwargs.get('unordered'):
+        elif isinstance(element_data.content, MutableMapping) or kwargs.get('unordered'):
             content = ModelVisitor(self).iter_unordered_content(element_data.content)
-        elif not isinstance(element_data.content, list):
+        elif not isinstance(element_data.content, MutableSequence):
             wrong_content_type = True
             content = []
         elif converter.losslessly:
@@ -873,6 +874,9 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
                                 )
                             yield self.validation_error(validation, reason, value, **kwargs)
                             continue
+
+            if over_max_depth:
+                continue
 
             for result in xsd_element.iter_encode(value, validation, **kwargs):
                 if isinstance(result, XMLSchemaValidationError):

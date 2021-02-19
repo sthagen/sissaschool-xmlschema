@@ -11,6 +11,7 @@
 This module contains classes for XML Schema simple data types.
 """
 from decimal import DecimalException
+from typing import Any
 
 from ..etree import etree_element
 from ..exceptions import XMLSchemaTypeError, XMLSchemaValueError
@@ -108,6 +109,9 @@ class XsdSimpleType(XsdType, ValidationMixin):
     patterns = None
     validators = ()
     allow_empty = True
+
+    # Unicode string as default datatype for XSD simple types
+    python_type = instance_types = to_python = from_python = str
 
     def __init__(self, elem, schema, parent, name=None, facets=None):
         super(XsdSimpleType, self).__init__(elem, schema, parent, name)
@@ -465,7 +469,6 @@ class XsdAtomic(XsdSimpleType):
     """
     variety = 'atomic'
 
-    to_python = str
     _special_types = {XSD_ANY_TYPE, XSD_ANY_SIMPLE_TYPE, XSD_ANY_ATOMIC_TYPE}
     _ADMITTED_TAGS = {XSD_RESTRICTION, XSD_SIMPLE_TYPE}
 
@@ -505,6 +508,9 @@ class XsdAtomic(XsdSimpleType):
         if self.primitive_type.is_complex():
             return XSD_10_FACETS if self.xsd_version == '1.0' else XSD_11_FACETS
         return self.primitive_type.admitted_facets
+
+    def is_datetime(self):
+        return self.primitive_type.to_python.__name__ == 'fromstring'
 
     def get_facet(self, tag):
         try:
@@ -569,9 +575,6 @@ class XsdAtomicBuiltin(XsdAtomic):
     @property
     def admitted_facets(self):
         return self._admitted_facets or self.primitive_type.admitted_facets
-
-    def is_datetime(self):
-        return self.to_python.__name__ == 'fromstring'
 
     def iter_decode(self, obj, validation='lax', **kwargs):
         if isinstance(obj, (str, bytes)):
@@ -660,19 +663,19 @@ class XsdAtomicBuiltin(XsdAtomic):
                     if not id_map[obj]:
                         id_map[obj] = 1
                     else:
-                        reason = "Duplicated xs:ID value {!r}".format(obj)
+                        reason = "duplicated xs:ID value {!r}".format(obj)
                         yield self.validation_error(validation, error=reason, obj=obj)
                 else:
                     if not id_map[obj]:
                         id_map[obj] = 1
                         id_list.append(obj)
                         if len(id_list) > 1 and self.xsd_version == '1.0':
-                            reason = "No more than one attribute of type ID should " \
+                            reason = "no more than one attribute of type ID should " \
                                      "be present in an element"
                             yield self.validation_error(validation, reason, obj, **kwargs)
 
                     elif obj not in id_list or self.xsd_version == '1.0':
-                        reason = "Duplicated xs:ID value {!r}".format(obj)
+                        reason = "duplicated xs:ID value {!r}".format(obj)
                         yield self.validation_error(validation, error=reason, obj=obj)
 
         yield result
@@ -691,28 +694,32 @@ class XsdAtomicBuiltin(XsdAtomic):
         elif isinstance(obj, bool):
             types_ = self.instance_types
             if types_ is not bool or (isinstance(types_, tuple) and bool in types_):
-                reason = "boolean value {!r} requires a {!r} decoder.".format(obj, bool)
+                reason = "boolean value {!r} requires a {!r} decoder".format(obj, bool)
                 yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
                 obj = self.python_type(obj)
 
         elif not isinstance(obj, self.instance_types):
-            reason = "{!r} is not an instance of {!r}.".format(obj, self.instance_types)
+            reason = "{!r} is not an instance of {!r}".format(obj, self.instance_types)
             yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
+
             try:
                 value = self.python_type(obj)
-                if value != obj:
+                if value != obj and not isinstance(value, str) \
+                        and not isinstance(obj, (str, bytes)):
                     raise ValueError()
-                else:
+                obj = value
+            except (ValueError, TypeError) as err:
+                yield XMLSchemaEncodeError(self, obj, self.from_python, reason=str(err))
+                yield None
+                return
+            else:
+                if value == obj or str(value) == str(obj):
                     obj = value
-            except ValueError:
-                yield XMLSchemaEncodeError(self, obj, self.from_python)
-                yield None
-                return
-            except TypeError:
-                reason = "Invalid value {!r}".format(obj)
-                yield self.validation_error(validation, error=reason, obj=obj)
-                yield None
-                return
+                else:
+                    reason = "Invalid value {!r}".format(obj)
+                    yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
+                    yield None
+                    return
 
         for validator in self.validators:
             try:
@@ -1116,7 +1123,7 @@ class XsdAtomicRestriction(XsdAtomic):
     _FACETS_BUILDERS = XSD_10_FACETS_BUILDERS
     _CONTENT_TAIL_TAGS = {XSD_ATTRIBUTE, XSD_ATTRIBUTE_GROUP, XSD_ANY_ATTRIBUTE}
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: str, value: Any):
         if name == 'elem' and value is not None:
             if self.name != XSD_ANY_ATOMIC_TYPE and value.tag != XSD_RESTRICTION:
                 if not (value.tag == XSD_SIMPLE_TYPE and value.get('name') is not None):
@@ -1336,10 +1343,13 @@ class XsdAtomicRestriction(XsdAtomic):
                     return
             else:
                 if self.validators and obj is not None:
-                    if isinstance(obj, (str, bytes)):
-                        if self.primitive_type.is_datetime() or \
-                                self.primitive_type.is_decimal():
+                    if isinstance(obj, (str, bytes)) and \
+                            self.primitive_type.to_python is not str and \
+                            isinstance(obj, self.primitive_type.instance_types):
+                        try:
                             obj = self.primitive_type.to_python(obj)
+                        except (ValueError, DecimalException, TypeError):
+                            pass
 
                     for validator in self.validators:
                         try:

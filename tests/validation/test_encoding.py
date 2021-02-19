@@ -13,6 +13,8 @@ import os
 import unittest
 from textwrap import dedent
 
+from elementpath import datatypes
+
 from xmlschema import XMLSchemaEncodeError, XMLSchemaValidationError
 from xmlschema.converters import UnorderedConverter
 from xmlschema.etree import etree_element, etree_tostring, ElementTree
@@ -112,13 +114,29 @@ class TestEncoding(XsdValidatorTestCase):
 
     def test_datetime_builtin_type(self):
         xs = self.get_schema('<xs:element name="dt" type="xs:dateTime"/>')
+
         dt = xs.decode('<dt>2019-01-01T13:40:00</dt>', datetime_types=True)
+        self.assertIsInstance(dt, datatypes.DateTime10)
+        self.assertEqual(etree_tostring(xs.encode(dt)), '<dt>2019-01-01T13:40:00</dt>')
+
+        dt = xs.decode('<dt>2019-01-01T13:40:00</dt>')
+        self.assertIsInstance(dt, str)
         self.assertEqual(etree_tostring(xs.encode(dt)), '<dt>2019-01-01T13:40:00</dt>')
 
     def test_date_builtin_type(self):
         xs = self.get_schema('<xs:element name="dt" type="xs:date"/>')
         date = xs.decode('<dt>2001-04-15</dt>', datetime_types=True)
         self.assertEqual(etree_tostring(xs.encode(date)), '<dt>2001-04-15</dt>')
+
+        mdate_type = self.st_schema.types['mdate']
+
+        date = mdate_type.encode('2001-01-01')
+        self.assertIsInstance(date, str)
+        self.assertEqual(date, '2001-01-01')
+
+        date = mdate_type.encode(datatypes.Date.fromstring('2001-01-01'))
+        self.assertIsInstance(date, str)
+        self.assertEqual(date, '2001-01-01')
 
     def test_duration_builtin_type(self):
         xs = self.get_schema('<xs:element name="td" type="xs:duration"/>')
@@ -135,28 +153,50 @@ class TestEncoding(XsdValidatorTestCase):
         gyear_month = xs.decode('<td>2000-12</td>', datetime_types=True)
         self.assertEqual(etree_tostring(xs.encode(gyear_month)), '<td>2000-12</td>')
 
+    def test_hex_binary_type(self):
+        hex_code_type = self.st_schema.types['hexCode']
+
+        value = hex_code_type.encode('00D7310A')
+        self.assertEqual(value, '00D7310A')
+        self.assertIsInstance(value, str)
+
+        value = hex_code_type.encode(datatypes.HexBinary(b'00D7310A'))
+        self.assertEqual(value, '00D7310A')
+        self.assertIsInstance(value, str)
+
+    def test_base64_binary_type(self):
+        base64_code_type = self.st_schema.types['base64Code']
+
+        value = base64_code_type.encode('YWJjZWZnaA==')
+        self.assertEqual(value, 'YWJjZWZnaA==')
+        self.assertIsInstance(value, str)
+
+        value = base64_code_type.encode(datatypes.Base64Binary(b'YWJjZWZnaA=='))
+        self.assertEqual(value, 'YWJjZWZnaA==')
+        self.assertIsInstance(value, str)
+
     def test_list_types(self):
         list_of_strings = self.st_schema.types['list_of_strings']
-        self.check_encode(list_of_strings, (10, 25, 40), u'', validation='lax')
-        self.check_encode(list_of_strings, (10, 25, 40), u'10 25 40', validation='skip')
-        self.check_encode(list_of_strings, ['a', 'b', 'c'], u'a b c', validation='skip')
+        self.check_encode(list_of_strings, (10, 25, 40), '10 25 40', validation='lax')
+        self.check_encode(list_of_strings, (10, 25, 40), '10 25 40', validation='skip')
+        self.check_encode(list_of_strings, ['a', 'b', 'c'], 'a b c', validation='skip')
 
         list_of_integers = self.st_schema.types['list_of_integers']
-        self.check_encode(list_of_integers, (10, 25, 40), u'10 25 40')
+        self.check_encode(list_of_integers, (10, 25, 40), '10 25 40')
         self.check_encode(list_of_integers, (10, 25.0, 40), XMLSchemaValidationError)
-        self.check_encode(list_of_integers, (10, 25.0, 40), u'10 25 40', validation='lax')
+        self.check_encode(list_of_integers, (10, 25.0, 40), '10 25 40', validation='lax')
 
         list_of_floats = self.st_schema.types['list_of_floats']
-        self.check_encode(list_of_floats, [10.1, 25.0, 40.0], u'10.1 25.0 40.0')
-        self.check_encode(list_of_floats, [10.1, 25, 40.0], u'10.1 25.0 40.0', validation='lax')
-        self.check_encode(list_of_floats, [10.1, False, 40.0], u'10.1 0.0 40.0', validation='lax')
+        self.check_encode(list_of_floats, [10.1, 25.0, 40.0], '10.1 25.0 40.0')
+        self.check_encode(list_of_floats, [10.1, 25, 40.0], '10.1 25.0 40.0', validation='lax')
+        self.check_encode(list_of_floats, [10.1, False, 40.0], '10.1 0.0 40.0', validation='lax')
 
         list_of_booleans = self.st_schema.types['list_of_booleans']
-        self.check_encode(list_of_booleans, [True, False, True], u'true false true')
+        self.check_encode(list_of_booleans, [True, False, True], 'true false true')
         self.check_encode(list_of_booleans, [10, False, True], XMLSchemaEncodeError)
-        self.check_encode(list_of_booleans, [True, False, 40.0], u'true false', validation='lax')
+        self.check_encode(list_of_booleans, [True, False, 40.0], 'true false', validation='lax')
         self.check_encode(list_of_booleans, [True, False, 40.0],
-                          u'true false 40.0', validation='skip')
+                          'true false 40.0', validation='skip')
 
     def test_union_types(self):
         integer_or_float = self.st_schema.types['integer_or_float']

@@ -770,14 +770,16 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             any_type.attributes[None].maps = self.maps
         return any_type
 
-    def create_element(self, name, text=None, **attrib):
+    def create_element(self, name, parent=None, text=None, **attrib):
         """
-        Creates an xs:element instance related to schema instance.
+        Creates an xs:element instance related to schema component.
+        Used as dummy element for validation/decoding/encoding
+        operations of wildcards and complex types.
         """
         elem = etree_element(XSD_ELEMENT, name=name, **attrib)
         if text is not None:
             elem.text = text
-        return self.BUILDERS.element_class(elem=elem, schema=self, parent=None)
+        return self.BUILDERS.element_class(elem=elem, schema=self, parent=parent)
 
     def copy(self):
         """
@@ -958,6 +960,16 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             return self.maps.elements.get(tag) if xsd_element is None else xsd_element
         else:
             return self.find(path, namespaces)
+
+    def create_bindings(self, *bases, **attrs):
+        """
+        Creates data object bindings for XSD elements of the schema.
+
+        :param bases: base classes to use for creating the binding classes.
+        :param attrs: attribute and method definitions for the binding classes body.
+        """
+        for xsd_element in self.iter_components(xsd_classes=XsdElement):
+            xsd_element.get_binding(*bases, replace_existing=True, **attrs)
 
     def _parse_inclusions(self):
         """Processes schema document inclusions and redefinitions."""
@@ -1562,8 +1574,8 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
 
     def iter_decode(self, source, path=None, schema_path=None, validation='lax',
                     process_namespaces=True, namespaces=None, use_defaults=True,
-                    decimal_type=None, datetime_types=False, converter=None,
-                    filler=None, fill_missing=False, keep_unknown=False,
+                    decimal_type=None, datetime_types=False, binary_types=False,
+                    converter=None, filler=None, fill_missing=False, keep_unknown=False,
                     max_depth=None, depth_filler=None, **kwargs):
         """
         Creates an iterator for decoding an XML source to a data structure.
@@ -1587,6 +1599,8 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         `xs:decimal` built-in and derived types), useful if you want to generate a \
         JSON-compatible data structure.
         :param datetime_types: if set to `True` the datetime and duration XSD types \
+        are decoded, otherwise their origin XML string is returned.
+        :param binary_types: if set to `True` xs:hexBinary and xs:base64Binary types \
         are decoded, otherwise their origin XML string is returned.
         :param converter: an :class:`XMLSchemaConverter` subclass or instance to use \
         for decoding.
@@ -1625,7 +1639,6 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             namespaces=namespaces,
             source=source,
             use_defaults=use_defaults,
-            datetime_types=datetime_types,
             id_map=Counter(),
             identities={},
             inherited={},
@@ -1633,6 +1646,10 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
 
         if decimal_type is not None:
             kwargs['decimal_type'] = decimal_type
+        if datetime_types:
+            kwargs['datetime_types'] = datetime_types
+        if binary_types:
+            kwargs['binary_types'] = binary_types
         if filler is not None:
             kwargs['filler'] = filler
         if fill_missing:
