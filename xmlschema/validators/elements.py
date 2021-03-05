@@ -629,7 +629,7 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
             else:
                 nilled = True
 
-        if xsd_type.is_empty() and elem.text:
+        if xsd_type.is_empty() and elem.text and xsd_type.normalize(elem.text):
             reason = "character data is not allowed because content is empty"
             yield self.validation_error(validation, reason, elem, **kwargs)
 
@@ -1046,6 +1046,9 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                 return self.parent.model != 'choice' and len(self.parent) > 1
         except AttributeError:
             return True
+
+    def is_empty(self):
+        return self.fixed == '' or self.type.is_empty()
 
 
 class Xsd11Element(XsdElement):
