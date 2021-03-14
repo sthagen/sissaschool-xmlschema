@@ -19,7 +19,6 @@ import logging
 import threading
 import warnings
 import re
-import sys
 from copy import copy
 from abc import ABCMeta
 from collections import namedtuple, Counter
@@ -60,10 +59,6 @@ from .wildcards import XsdAnyElement, XsdAnyAttribute, Xsd11AnyElement, \
 from .global_maps import XsdGlobals
 
 logger = logging.getLogger('xmlschema')
-logging_formatter = logging.Formatter('[%(levelname)s] %(message)s')
-logging_handler = logging.StreamHandler(sys.stderr)
-logging_handler.setFormatter(logging_formatter)
-logger.addHandler(logging_handler)
 
 XSD_VERSION_PATTERN = re.compile(r'^\d+\.\d+$')
 DRIVE_PATTERN = re.compile(r'^[a-zA-Z]:$')
@@ -98,7 +93,6 @@ class XMLSchemaMeta(ABCMeta):
             # Defining a subclass without a meta-schema (eg. XMLSchemaBase)
             return super(XMLSchemaMeta, mcs).__new__(mcs, name, bases, dict_)
         dict_['meta_schema'] = None
-        dict_['lock'] = threading.Lock()  # Lock instance for shared meta-schemas
 
         xsd_version = dict_.get('XSD_VERSION') or get_attribute('XSD_VERSION', *bases)
         if xsd_version not in ('1.0', '1.1'):
@@ -135,7 +129,6 @@ class XMLSchemaMeta(ABCMeta):
         schema_location = meta_schema.url if isinstance(meta_schema, XMLSchemaBase) else meta_schema
         meta_schema = meta_schema_class.create_meta_schema(schema_location)
         dict_['meta_schema'] = meta_schema
-        dict_.pop('lock')
 
         return super(XMLSchemaMeta, mcs).__new__(mcs, name, bases, dict_)
 
@@ -290,13 +283,15 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
     default_attributes = None
     default_open_content = None
     override = None
+
+    # Store XPath constructors tokens (for schema and its assertions)
     xpath_tokens = None
 
     def __init__(self, source, namespace=None, validation='strict', global_maps=None,
                  converter=None, locations=None, base_url=None, allow='all', defuse='remote',
                  timeout=300, build=True, use_meta=True, use_fallback=True, loglevel=None):
         super(XMLSchemaBase, self).__init__(validation)
-        ElementPathMixin.__init__(self)
+        self.lock = threading.Lock()  # Lock for build operations
 
         if loglevel is not None:
             if isinstance(loglevel, str):
@@ -461,9 +456,15 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             if loglevel is not None:
                 logger.setLevel(logging.WARNING)  # Restore default logging
 
-    @property
-    def name(self):
-        return os.path.basename(self.url) if self.url else None
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('lock', None)
+        state.pop('xpath_tokens', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.lock = threading.Lock()
 
     def __repr__(self):
         if self.url:
@@ -504,6 +505,10 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
 
     def __len__(self):
         return len(self.elements)
+
+    @property
+    def name(self):
+        return os.path.basename(self.url) if self.url else None
 
     @property
     def xpath_proxy(self):
