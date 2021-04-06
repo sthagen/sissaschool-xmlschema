@@ -12,6 +12,7 @@ This module contains classes for XML Schema elements, complex types and model gr
 """
 import warnings
 from decimal import Decimal
+from types import GeneratorType
 from typing import Optional
 from elementpath import XPath2Parser, ElementPathError, XPathContext
 from elementpath.datatypes import AbstractDateTime, Duration, AbstractBinary
@@ -33,7 +34,7 @@ from .xsdbase import XSD_TYPE_DERIVATIONS, XSD_ELEMENT_DERIVATIONS, \
     XsdComponent, XsdType, ValidationMixin
 from .particles import ParticleMixin
 from .models import OccursCounter
-from .identities import XsdKeyref
+from .identities import XsdIdentity, XsdKeyref
 from .wildcards import XsdAnyElement
 
 
@@ -438,9 +439,8 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
         else:
             if isinstance(self, xsd_classes):
                 yield self
-            for obj in self.identities.values():
-                if isinstance(obj, xsd_classes):
-                    yield obj
+            if issubclass(XsdIdentity, xsd_classes):
+                yield from self.identities.values()
 
         if self.ref is None and self.type.parent is not None:
             yield from self.type.iter_components(xsd_classes)
@@ -557,7 +557,7 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
         except KeyError:
             converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
         else:
-            if not isinstance(converter, XMLSchemaConverter) and converter is not None:
+            if converter is not None and not isinstance(converter, XMLSchemaConverter):
                 converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
 
         try:
@@ -703,7 +703,9 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                     else:
                         value = result
 
-            if isinstance(value, (int, float, list)) or value is None:
+            if 'value_hook' in kwargs:
+                value = kwargs['value_hook'](value, xsd_type)
+            elif isinstance(value, (int, float, list)) or value is None:
                 pass
             elif isinstance(value, str):
                 if value.startswith('{') and xsd_type.is_qname():
@@ -715,10 +717,10 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                     pass
             elif isinstance(value, (AbstractDateTime, Duration)):
                 if not kwargs.get('datetime_types'):
-                    value = elem.text
+                    value = str(value) if text is None else text.strip()
             elif isinstance(value, AbstractBinary):
                 if not kwargs.get('binary_types'):
-                    value = elem.text
+                    value = str(value)
 
         if converter is not None:
             element_data = ElementData(elem.tag, value, content, attributes)
@@ -761,6 +763,17 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                     try:
                         counter.increase(fields)
                     except ValueError as err:
+                        yield self.validation_error(validation, err, elem, **kwargs)
+
+        # Apply non XSD optional validations
+        if 'extra_validator' in kwargs:
+            try:
+                result = kwargs['extra_validator'](elem, self)
+            except XMLSchemaValidationError as err:
+                yield self.validation_error(validation, err, elem, **kwargs)
+            else:
+                if isinstance(result, GeneratorType):
+                    for err in result:
                         yield self.validation_error(validation, err, elem, **kwargs)
 
         # Disable collect for out of scope identities and check key references
@@ -909,7 +922,9 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
         del element_data
 
     def is_matching(self, name, default_namespace=None, group=None):
-        if default_namespace and name[0] != '{':
+        if not name:
+            return False
+        elif default_namespace and name[0] != '{':
             qname = '{%s}%s' % (default_namespace, name)
             if name == self.name or qname == self.name:
                 return True
@@ -920,7 +935,9 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
             return any(name == e.name for e in self.iter_substitutes())
 
     def match(self, name, default_namespace=None, **kwargs):
-        if default_namespace and name[0] != '{':
+        if not name:
+            return
+        elif default_namespace and name[0] != '{':
             qname = '{%s}%s' % (default_namespace, name)
             if name == self.name or qname == self.name:
                 return self
@@ -1128,6 +1145,7 @@ class Xsd11Element(XsdElement):
         else:
             if isinstance(self, xsd_classes):
                 yield self
+
             for obj in self.identities.values():
                 if isinstance(obj, xsd_classes):
                     yield obj

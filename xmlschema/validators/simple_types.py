@@ -1271,8 +1271,23 @@ class XsdAtomicRestriction(XsdAtomic):
         return self.base_type.variety
 
     def iter_components(self, xsd_classes=None):
-        if xsd_classes is None or isinstance(self, xsd_classes):
+        if xsd_classes is None:
             yield self
+            for facet in self.facets.values():
+                if isinstance(facet, list):
+                    yield from facet  # XSD 1.1 assertions can be more than one
+                else:
+                    yield facet
+        else:
+            if isinstance(self, xsd_classes):
+                yield self
+            if issubclass(XsdFacet, xsd_classes):
+                for facet in self.facets.values():
+                    if isinstance(facet, list):
+                        yield from facet
+                    else:
+                        yield facet
+
         if self.base_type.parent is not None:
             yield from self.base_type.iter_components(xsd_classes)
 

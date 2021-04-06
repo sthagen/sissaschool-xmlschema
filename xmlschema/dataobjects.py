@@ -9,12 +9,14 @@
 #
 from abc import ABCMeta
 from collections.abc import MutableSequence
+from itertools import count
 from elementpath import XPathContext, XPath2Parser
 
 from .exceptions import XMLSchemaAttributeError, XMLSchemaTypeError, XMLSchemaValueError
 from .etree import etree_tostring
 from .helpers import get_namespace, get_prefixed_qname, local_name, raw_xml_encode
 from .converters import ElementData, XMLSchemaConverter
+from .resources import XMLResource
 from . import validators
 
 
@@ -84,17 +86,17 @@ class DataElement(MutableSequence):
     def __setattr__(self, key, value):
         if key == 'xsd_element':
             if not isinstance(value, validators.XsdElement):
-                msg = "attribute 'xsd_element' must be an {!r} instance"
-                raise XMLSchemaTypeError(msg.format(validators.XsdElement))
-            elif self.xsd_element is not None and self.xsd_element is not value:
+                raise XMLSchemaTypeError("invalid type for attribute 'xsd_element'")
+            elif self.xsd_element is value:
+                pass
+            elif self.xsd_element is not None:
                 raise XMLSchemaValueError("the instance is already bound to another XSD element")
             elif self.xsd_type is not None and self.xsd_type is not value.type:
                 raise XMLSchemaValueError("the instance is already bound to another XSD type")
 
         elif key == 'xsd_type':
             if not isinstance(value, validators.XsdType):
-                msg = "attribute 'xsd_type' must be an {!r} instance"
-                raise XMLSchemaTypeError(msg.format(validators.XsdType))
+                raise XMLSchemaTypeError("invalid type for attribute 'xsd_type'")
             elif self.xsd_type is not None and self.xsd_type is not value:
                 raise XMLSchemaValueError("the instance is already bound to another XSD type")
             elif self.xsd_element is None or value is not self.xsd_element.type:
@@ -151,7 +153,8 @@ class DataElement(MutableSequence):
         Validates the XML data object.
 
         :param use_defaults: whether to use default values for filling missing data.
-        :param namespaces: is an optional mapping from namespace prefix to URI.
+        :param namespaces: is an optional mapping from namespace prefix to URI. \
+        For default uses the namespace map of the XML data object.
         :param max_depth: maximum depth for validation, for default there is no limit.
         :raises: :exc:`XMLSchemaValidationError` if XML data object is not valid.
         :raises: :exc:`XMLSchemaValueError` if the instance has no schema bindings.
@@ -167,23 +170,21 @@ class DataElement(MutableSequence):
 
         :raises: :exc:`XMLSchemaValueError` if the instance has no schema bindings.
         """
-        return next(self.iter_errors(use_defaults, namespaces, max_depth), None) is None
+        error = next(self.iter_errors(use_defaults, namespaces, max_depth), None)
+        return error is None
 
     def iter_errors(self, use_defaults=True, namespaces=None, max_depth=None):
         """
         Generates a sequence of validation errors if the XML data object is invalid.
-
-        :param use_defaults: whether to use default values for filling missing data.
-        :param namespaces: is an optional mapping from namespace prefix to URI.
-        :param max_depth: maximum depth for validation, for default there is no limit.
-        :raises: :exc:`XMLSchemaValueError` if the instance has no schema bindings.
+        Accepts the same arguments of :meth:`validate`.
         """
         if self._encoder is None:
             raise XMLSchemaValueError("{!r} has no schema bindings".format(self))
 
-        kwargs = {'converter': DataElementConverter}
-        if not use_defaults:
-            kwargs['use_defaults'] = False
+        kwargs = {
+            'converter': DataElementConverter,
+            'use_defaults': use_defaults,
+        }
         if namespaces:
             kwargs['namespaces'] = namespaces
         if isinstance(max_depth, int) and max_depth >= 0:
@@ -292,6 +293,8 @@ class DataElement(MutableSequence):
 class DataBindingMeta(ABCMeta):
     """Metaclass for creating classes with bindings to XSD elements."""
 
+    xsd_element = None
+
     def __new__(mcs, name, bases, attrs):
         try:
             xsd_element = attrs['xsd_element']
@@ -310,7 +313,9 @@ class DataBindingMeta(ABCMeta):
         cls.xsd_version = cls.xsd_element.xsd_version
         cls.namespace = cls.xsd_element.target_namespace
 
-    def fromsource(cls, source, **kwargs):
+    def fromsource(cls, source, allow='all', defuse='remote', timeout=300, **kwargs):
+        if not isinstance(source, XMLResource):
+            source = XMLResource(source, allow=allow, defuse=defuse, timeout=timeout)
         if 'converter' not in kwargs:
             kwargs['converter'] = DataBindingConverter
         return cls.xsd_element.schema.decode(source, **kwargs)
@@ -340,6 +345,11 @@ class DataElementConverter(XMLSchemaConverter):
     def losslessly(self):
         return True
 
+    def copy(self, **kwargs):
+        obj = super().copy(**kwargs)
+        obj.data_element_class = kwargs.get('data_element_class', self.data_element_class)
+        return obj
+
     def element_decode(self, data, xsd_element, xsd_type=None, level=0):
         data_element = self.data_element_class(
             tag=data.tag,
@@ -351,10 +361,14 @@ class DataElementConverter(XMLSchemaConverter):
         data_element.attrib.update((k, v) for k, v in self.map_attributes(data.attributes))
 
         if (xsd_type or xsd_element.type).model_group is not None:
-            data_element.extend([
-                value if value is not None else self.list([name])
-                for name, value, _ in self.map_content(data.content)
-            ])
+            for name, value, _ in self.map_content(data.content):
+                if not name.isdigit():
+                    data_element.append(value)
+                else:
+                    try:
+                        data_element[-1].tail = value
+                    except IndexError:
+                        data_element.value = value
 
         return data_element
 
@@ -370,17 +384,17 @@ class DataElementConverter(XMLSchemaConverter):
         if not data_len:
             return ElementData(data_element.tag, data_element.value, None, attributes)
 
-        elif data_len == 1 and \
-                (xsd_element.type.simple_type is not None or not
-                 xsd_element.type.content and xsd_element.type.mixed):
-            return ElementData(data_element.tag, data_element.value, [], attributes)
-        else:
-            cdata_num = iter(range(1, data_len))
-            content = [
-                (self.unmap_qname(e.tag), e) if isinstance(e, self.data_element_class)
-                else (next(cdata_num), e) for e in data_element
-            ]
-            return ElementData(data_element.tag, None, content, attributes)
+        content = []
+        cdata_num = count(1)
+        if data_element.value is not None:
+            content.append((next(cdata_num), data_element.value))
+
+        for e in data_element:
+            content.append((e.tag, e))
+            if e.tail is not None:
+                content.append((next(cdata_num), e.tail))
+
+        return ElementData(data_element.tag, None, content, attributes)
 
 
 class DataBindingConverter(DataElementConverter):
@@ -401,9 +415,13 @@ class DataBindingConverter(DataElementConverter):
         data_element.attrib.update((k, v) for k, v in self.map_attributes(data.attributes))
 
         if (xsd_type or xsd_element.type).model_group is not None:
-            data_element.extend([
-                value if value is not None else self.list([name])
-                for name, value, _ in self.map_content(data.content)
-            ])
+            for name, value, _ in self.map_content(data.content):
+                if not name.isdigit():
+                    data_element.append(value)
+                else:
+                    try:
+                        data_element[-1].tail = value
+                    except IndexError:
+                        data_element.value = value
 
         return data_element

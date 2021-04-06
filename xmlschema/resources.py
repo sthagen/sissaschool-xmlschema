@@ -8,12 +8,13 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 import os.path
+import platform
 import re
 from string import ascii_letters
 from elementpath import iter_select, XPath1Parser, XPathContext, XPath2Parser
 from io import StringIO, BytesIO
 from urllib.request import urlopen, pathname2url
-from urllib.parse import uses_relative, urlsplit, urljoin, urlunsplit
+from urllib.parse import uses_relative, urlsplit, urljoin, urlunsplit, unquote
 from urllib.error import URLError
 
 from .exceptions import XMLSchemaTypeError, XMLSchemaValueError, XMLResourceError
@@ -199,7 +200,12 @@ def is_local_url(url):
 def url_path_is_file(url):
     if not is_local_url(url):
         return False
-    return os.path.isfile(url) or os.path.isfile(urlsplit(normalize_url(url)).path)
+    if os.path.isfile(url):
+        return True
+    path = unquote(urlsplit(normalize_url(url)).path)
+    if path.startswith('/') and platform.system() == 'Windows':
+        path = path[1:]
+    return os.path.isfile(path)
 
 
 ###
@@ -403,9 +409,16 @@ class XMLResource:
         return self._text
 
     @property
+    def name(self):
+        """
+        The source name, is `None` if the instance is created from an Element or a string.
+        """
+        return os.path.basename(self._url) if self.url else None
+
+    @property
     def url(self):
         """
-        The source URL, `None` if the instance is created from an Element tree or from a string.
+        The source URL, `None` if the instance is created from an Element or a string.
         """
         return self._url
 
@@ -413,6 +426,16 @@ class XMLResource:
     def base_url(self):
         """The effective base URL used for completing relative locations."""
         return os.path.dirname(self._url) if self._url else self._base_url
+
+    @property
+    def filepath(self):
+        """
+        The resource filepath if the intance is created from a local file, `None` otherwise.
+        """
+        if self._url:
+            url_parts = urlsplit(self._url)
+            if url_parts.scheme in ('', 'file'):
+                return url_parts.path
 
     @property
     def allow(self):

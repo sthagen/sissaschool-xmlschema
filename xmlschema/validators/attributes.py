@@ -236,6 +236,8 @@ class XsdAttribute(XsdComponent, ValidationMixin):
                 )
                 yield value
                 continue
+            elif 'value_hook' in kwargs:
+                yield kwargs['value_hook'](value, self.type)
             elif isinstance(value, (int, float, list)) or value is None:
                 yield value
             elif isinstance(value, str):
@@ -249,9 +251,9 @@ class XsdAttribute(XsdComponent, ValidationMixin):
                 except (KeyError, TypeError):
                     yield value
             elif isinstance(value, (AbstractDateTime, Duration)):
-                yield value if kwargs.get('datetime_types') else text
+                yield value if kwargs.get('datetime_types') else text.strip()
             elif isinstance(value, AbstractBinary) and not kwargs.get('binary_types'):
-                yield text
+                yield str(value)
             else:
                 yield value
             break

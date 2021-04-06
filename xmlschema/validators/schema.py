@@ -507,10 +507,6 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         return len(self.elements)
 
     @property
-    def name(self):
-        return os.path.basename(self.url) if self.url else None
-
-    @property
     def xpath_proxy(self):
         return XMLSchemaProxy(self)
 
@@ -530,14 +526,24 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         return self.source.get_text()
 
     @property
+    def name(self):
+        """Schema resource name, is `None` if the schema is built from an Element or a string."""
+        return self.source.name
+
+    @property
     def url(self):
-        """Schema resource URL, is `None` if the schema is built from a string."""
+        """Schema resource URL, is `None` if the schema is built from an Element or a string."""
         return self.source.url
 
     @property
     def base_url(self):
         """The base URL of the source of the schema."""
         return self.source.base_url
+
+    @property
+    def filepath(self):
+        """The filepath if the schema is loaded from a local XSD file, `None` otherwise."""
+        return self.source.filepath
 
     @property
     def allow(self):
@@ -1202,14 +1208,13 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         self.imports[namespace] = schema
         return schema
 
-    def export(self, target, only_relative=True):
+    def export(self, target, save_remote=False):
         """
         Exports a schema instance. The schema instance is exported to a
         directory with also the hierarchy of imported/included schemas.
 
         :param target: a path to a local empty directory.
-        :param only_relative: for default only loaded schemas referred by a relative \
-        location are saved. If `False` is provided all the loaded schemas are saved.
+        :param save_remote: if `True` is provided saves also remote schemas.
         """
         import pathlib
         from urllib.parse import urlsplit
@@ -1230,56 +1235,74 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
 
         url = self.url or 'schema.xsd'
         basename = pathlib.Path(urlsplit(url).path).name
-        exported_schemas = {self: [target_path.joinpath(basename), self.get_text()]}
+        exports = {self: [target_path.joinpath(basename), self.get_text()]}
 
         while True:
-            current_length = len(exported_schemas)
-            for schema in list(exported_schemas):
-                for location, ref_schema in \
-                        chain(schema.includes.items(), schema.imports.items()):
+            current_length = len(exports)
 
-                    if ref_schema in exported_schemas:
+            for schema in list(exports):
+                dir_path = exports[schema][0].parent
+                imports_items = [(x.url, x) for x in schema.imports.values() if x is not None]
+
+                for location, ref_schema in chain(schema.includes.items(), imports_items):
+                    if ref_schema in exports:
                         continue
 
-                    schema_path = exported_schemas[schema][0].parent
-
                     if is_remote_url(location):
-                        if only_relative:
+                        if not save_remote:
                             continue
                         url_parts = urlsplit(location)
                         netloc, path = url_parts.netloc, url_parts.path
                         path = pathlib.Path().joinpath(netloc).joinpath(path.lstrip('/'))
                     else:
+                        if location.startswith('file:/'):
+                            location = urlsplit(location).path
+
                         path = pathlib.Path(location)
                         if path.is_absolute():
-                            if only_relative:
-                                continue
+                            location = '/'.join(path.parts[-2:])
+                            try:
+                                schema_path = pathlib.Path(schema.filepath)
+                            except TypeError:
+                                pass
+                            else:
+                                try:
+                                    path = path.relative_to(schema_path.parent)
+                                except ValueError:
+                                    parts = path.parts
+                                    if parts[:-2] == schema_path.parts[:-2]:
+                                        path = pathlib.Path(location)
+                                else:
+                                    path = dir_path.joinpath(path)
+                                    exports[ref_schema] = [path, ref_schema.get_text()]
+                                    continue
+
                         elif not str(path).startswith('..'):
-                            path = schema_path.joinpath(path)
-                            exported_schemas[ref_schema] = [path, ref_schema.get_text()]
+                            path = dir_path.joinpath(path)
+                            exports[ref_schema] = [path, ref_schema.get_text()]
                             continue
 
-                    if DRIVE_PATTERN.match(path.parts[0]):
-                        path = pathlib.Path().joinpath(path.parts[1:])
+                        if DRIVE_PATTERN.match(path.parts[0]):
+                            path = pathlib.Path().joinpath(path.parts[1:])
 
-                    for strip_path in ('/', '\\', '..'):
-                        while True:
-                            try:
-                                path = path.relative_to(strip_path)
-                            except ValueError:
-                                break
+                        for strip_path in ('/', '\\', '..'):
+                            while True:
+                                try:
+                                    path = path.relative_to(strip_path)
+                                except ValueError:
+                                    break
 
                     path = target_path.joinpath(path)
                     repl = 'schemaLocation="{}"'.format(path.as_posix())
-                    text = exported_schemas[schema][1]
+                    schema_text = exports[schema][1]
                     pattern = r'\bschemaLocation\s*=\s*[\'\"].*%s.*[\'"]' % re.escape(location)
-                    exported_schemas[schema][1] = re.sub(pattern, repl, text)
-                    exported_schemas[ref_schema] = [path, ref_schema.get_text()]
+                    exports[schema][1] = re.sub(pattern, repl, schema_text)
+                    exports[ref_schema] = [path, ref_schema.get_text()]
 
-            if current_length == len(exported_schemas):
+            if current_length == len(exports):
                 break
 
-        for schema, (path, text) in exported_schemas.items():
+        for schema, (path, text) in exports.items():
             if not path.parent.exists():
                 path.parent.mkdir(parents=True)
 
@@ -1420,27 +1443,10 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             )
         return '{%s}%s' % (namespace, local_name)
 
-    def validate(self, source, path=None, schema_path=None, use_defaults=True, namespaces=None):
+    def validate(self, source, path=None, schema_path=None, use_defaults=True,
+                 namespaces=None, max_depth=None, extra_validator=None):
         """
         Validates an XML data against the XSD schema/component instance.
-
-        :raises: :exc:`XMLSchemaValidationError` if XML *data* instance is not a valid.
-        """
-        for error in self.iter_errors(source, path, schema_path, use_defaults, namespaces):
-            raise error
-
-    def is_valid(self, source, path=None, schema_path=None, use_defaults=True, namespaces=None):
-        """
-        Like :meth:`validate` except that do not raises an exception but returns ``True`` if
-        the XML data is valid, ``False`` if it's invalid.
-        """
-        error = next(self.iter_errors(source, path, schema_path, use_defaults, namespaces), None)
-        return error is None
-
-    def iter_errors(self, source, path=None, schema_path=None, use_defaults=True, namespaces=None):
-        """
-        Creates an iterator for the errors generated by the validation of an XML data
-        against the XSD schema/component instance.
 
         :param source: the source of XML data. Can be an :class:`XMLResource` instance, a \
         path to a file or an URI of a resource or an opened file-like object or an Element \
@@ -1452,6 +1458,34 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         global element of the schema.
         :param use_defaults: Use schema's default values for filling missing data.
         :param namespaces: is an optional mapping from namespace prefix to URI.
+        :param max_depth: maximum level of validation, for default there is no limit. \
+        With lazy resources is set to `source.lazy_depth` for managing lazy validation.
+        :param extra_validator: an optional function for performing non-standard \
+        validations on XML data. The provided function is called for each traversed \
+        element, with the XML element as 1st argument and the corresponding XSD \
+        element as 2nd argument. It can be also a generator function and has to \
+        raise/yield :exc:`XMLSchemaValidationError` exceptions.
+        :raises: :exc:`XMLSchemaValidationError` if the XML data instance is invalid.
+        """
+        for error in self.iter_errors(source, path, schema_path, use_defaults,
+                                      namespaces, max_depth, extra_validator):
+            raise error
+
+    def is_valid(self, source, path=None, schema_path=None, use_defaults=True,
+                 namespaces=None, max_depth=None, extra_validator=None):
+        """
+        Like :meth:`validate` except that does not raise an exception but returns
+        ``True`` if the XML data instance is valid, ``False`` if it is invalid.
+        """
+        error = next(self.iter_errors(source, path, schema_path, use_defaults,
+                                      namespaces, max_depth, extra_validator), None)
+        return error is None
+
+    def iter_errors(self, source, path=None, schema_path=None, use_defaults=True,
+                    namespaces=None, max_depth=None, extra_validator=None):
+        """
+        Creates an iterator for the errors generated by the validation of an XML data against
+        the XSD schema/component instance. Accepts the same arguments of :meth:`validate`.
         """
         self.check_validator(validation='lax')
         if not isinstance(source, XMLResource):
@@ -1482,6 +1516,10 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             'inherited': {},
             'locations': locations,  # TODO: lazy schemas load
         }
+        if max_depth is not None:
+            kwargs['max_depth'] = max_depth
+        if extra_validator is not None:
+            kwargs['extra_validator'] = extra_validator
 
         if path:
             selector = source.iterfind(path, namespaces, nsmap=namespaces, ancestors=ancestors)
@@ -1581,7 +1619,7 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
                     process_namespaces=True, namespaces=None, use_defaults=True,
                     decimal_type=None, datetime_types=False, binary_types=False,
                     converter=None, filler=None, fill_missing=False, keep_unknown=False,
-                    max_depth=None, depth_filler=None, **kwargs):
+                    max_depth=None, depth_filler=None, value_hook=None, **kwargs):
         """
         Creates an iterator for decoding an XML source to a data structure.
 
@@ -1595,7 +1633,7 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         global element of the schema.
         :param validation: defines the XSD validation mode to use for decode, can be \
         'strict', 'lax' or 'skip'.
-        :param process_namespaces: whether to use namespace information in the
+        :param process_namespaces: whether to use namespace information in the \
         decoding process, using the map provided with the argument *namespaces* \
         and the map extracted from the XML document.
         :param namespaces: is an optional mapping from namespace prefix to URI.
@@ -1604,9 +1642,9 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         `xs:decimal` built-in and derived types), useful if you want to generate a \
         JSON-compatible data structure.
         :param datetime_types: if set to `True` the datetime and duration XSD types \
-        are decoded, otherwise their origin XML string is returned.
+        are kept decoded, otherwise their origin XML string is returned.
         :param binary_types: if set to `True` xs:hexBinary and xs:base64Binary types \
-        are decoded, otherwise their origin XML string is returned.
+        are kept decoded, otherwise their origin XML string is returned.
         :param converter: an :class:`XMLSchemaConverter` subclass or instance to use \
         for decoding.
         :param filler: an optional callback function to fill undecodable data with a \
@@ -1617,10 +1655,14 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
         The filling value is `None` or a typed value if the *filler* callback is provided.
         :param keep_unknown: if set to `True` unknown tags are kept and are decoded with \
         *xs:anyType*. For default unknown tags not decoded by a wildcard are discarded.
-        :param max_depth: maximum level of decoding, for default there is no limit.
+        :param max_depth: maximum level of decoding, for default there is no limit. \
+        With lazy resources is set to `source.lazy_depth` for managing lazy decoding.
         :param depth_filler: an optional callback function to replace data over the \
         *max_depth* level. The callback function must accept one positional argument, that \
         can be an XSD Element. If not provided deeper data are replaced with `None` values.
+        :param value_hook: an optional function that will be called with any decoded \
+        atomic value and the XSD type used for decoding. The return value will be used \
+        instead of the original value.
         :param kwargs: keyword arguments with other options for converter and decoder.
         :return: yields a decoded data object, eventually preceded by a sequence of \
         validation or decoding errors.
@@ -1665,6 +1707,8 @@ class XMLSchemaBase(XsdValidator, ValidationMixin, ElementPathMixin, metaclass=X
             kwargs['max_depth'] = max_depth
         if depth_filler is not None:
             kwargs['depth_filler'] = depth_filler
+        if value_hook is not None:
+            kwargs['value_hook'] = value_hook
 
         if path:
             selector = source.iterfind(path, namespaces, nsmap=namespaces)
