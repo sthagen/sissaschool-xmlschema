@@ -10,7 +10,9 @@
 #
 import unittest
 import os
+import json
 from decimal import Decimal
+from collections.abc import MutableMapping, MutableSequence, Set
 import base64
 
 try:
@@ -325,6 +327,17 @@ DATA_DICT = {
     'simple_boolean': [True, False],
     'date_and_time': '2020-03-05T23:04:10.047',  # xs:dateTime is not decoded for default
 }
+
+
+def iter_nested_iterables(obj):
+    if not isinstance(obj, (MutableMapping, MutableSequence, Set, tuple)):
+        yield obj
+    else:
+        for item in obj.values() if isinstance(obj, MutableMapping) else obj:
+            if not isinstance(item, (MutableMapping, MutableSequence, Set, tuple)):
+                yield item
+            else:
+                yield from iter_nested_iterables(item)
 
 
 class TestDecoding(XsdValidatorTestCase):
@@ -678,6 +691,11 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertEqual(xs.decode('<dt>2001-04-15</dt>', datetime_types=True),
                          datatypes.Date10.fromstring('2001-04-15'))
 
+        xs = self.get_schema('<xs:attribute name="dt" type="xs:date"/>')
+        self.assertEqual(xs.attributes['dt'].decode('2001-04-15'), '2001-04-15')
+        self.assertEqual(xs.attributes['dt'].decode('2001-04-15', datetime_types=True),
+                         datatypes.Date10.fromstring('2001-04-15'))
+
     def test_duration_type(self):
         xs = self.get_schema('<xs:element name="td" type="xs:duration"/>')
         self.assertEqual(xs.decode('<td>P5Y3MT60H30.001S</td>'), 'P5Y3MT60H30.001S')
@@ -804,6 +822,16 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertEqual(obj, '9AFD')
         self.assertIsInstance(obj, datatypes.HexBinary)
 
+        xs = self.get_schema('<xs:attribute name="hex" type="xs:hexBinary"/>')
+
+        obj = xs.attributes['hex'].decode(' 9AFD ')
+        self.assertEqual(obj, '9AFD')
+        self.assertIsInstance(obj, str)
+
+        obj = xs.attributes['hex'].decode(' 9AFD ', binary_types=True)
+        self.assertEqual(obj, '9AFD')
+        self.assertIsInstance(obj, datatypes.HexBinary)
+
     def test_base64_binary_type(self):
         base64_code_type = self.st_schema.types['base64Code']
         self.check_decode(base64_code_type, base64.b64encode(b'ok'), XMLSchemaValidationError)
@@ -812,6 +840,18 @@ class TestDecoding(XsdValidatorTestCase):
         expected_value = datatypes.Base64Binary(base64_value)
         self.check_decode(base64_code_type, base64_value, expected_value)
 
+        # Attribute
+        xs = self.get_schema('<xs:attribute name="b64" type="xs:base64Binary"/>')
+
+        obj = xs.attributes['b64'].decode(base64_value.decode())
+        self.assertEqual(obj, expected_value)
+        self.assertIsInstance(obj, str)
+
+        obj = xs.attributes['b64'].decode(base64_value.decode(), binary_types=True)
+        self.assertEqual(obj, expected_value)
+        self.assertIsInstance(obj, datatypes.Base64Binary)
+
+        # Element
         xs = self.get_schema('<xs:element name="b64" type="xs:base64Binary"/>')
 
         obj = xs.decode('<b64>{}</b64>'.format(base64_value.decode()))
@@ -1087,6 +1127,31 @@ class TestDecoding(XsdValidatorTestCase):
                            path='/na:main/na:item[@doc_id=2]'),
         self.assertIn('is not an element of the schema', str(ctx.exception))
 
+    def test_issue_238__decode_bytes_strings(self):
+        with open(self.vh_xml_file, 'rb') as fp:
+            vh_xml_data = fp.read()
+
+        self.assertIsInstance(vh_xml_data, bytes)
+
+        obj = self.vh_schema.decode(vh_xml_data)
+
+        # ElementTree accepts also bytes but emits Unicode strings only
+        for value in iter_nested_iterables(obj):
+            self.assertNotIsInstance(value, bytes)
+
+    def test_issue_240__decode_unicode_to_json(self):
+        schema = self.get_schema('<xs:element name="chars" type="xs:string"/>')
+
+        xml_data = '<chars>øæå</chars>'
+        obj = xmlschema.to_dict(xml_data, schema=schema, decimal_type=str)
+        self.assertEqual(obj, 'øæå')
+        self.assertEqual(obj, schema.decode(xml_data, decimal_type=str))
+
+        json_data = json.dumps(obj, indent=4)
+        self.assertEqual(obj, 'øæå')
+        self.assertIsInstance(obj, str)
+        self.assertEqual(json_data.encode("utf-8"), b'"\\u00f8\\u00e6\\u00e5"')
+
 
 class TestDecoding11(TestDecoding):
     schema_class = XMLSchema11
@@ -1100,6 +1165,11 @@ class TestDecoding11(TestDecoding):
         xs = self.get_schema('<xs:element name="dt" type="xs:date"/>')
         self.assertEqual(xs.decode('<dt>2001-04-15</dt>'), '2001-04-15')
         self.assertEqual(xs.decode('<dt>2001-04-15</dt>', datetime_types=True),
+                         datatypes.Date.fromstring('2001-04-15'))
+
+        xs = self.get_schema('<xs:attribute name="dt" type="xs:date"/>')
+        self.assertEqual(xs.attributes['dt'].decode('2001-04-15'), '2001-04-15')
+        self.assertEqual(xs.attributes['dt'].decode('2001-04-15', datetime_types=True),
                          datatypes.Date.fromstring('2001-04-15'))
 
     def test_derived_duration_types(self):
