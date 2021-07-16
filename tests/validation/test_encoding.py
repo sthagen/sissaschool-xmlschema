@@ -13,6 +13,11 @@ import os
 import unittest
 from textwrap import dedent
 
+try:
+    import lxml.etree as lxml_etree
+except ImportError:
+    lxml_etree = None
+
 from elementpath import datatypes
 
 from xmlschema import XMLSchemaEncodeError, XMLSchemaValidationError
@@ -567,6 +572,85 @@ class TestEncoding(XsdValidatorTestCase):
         elem = schema.encode({'@b2': False, '@b1': False})
         self.assertIsNone(elem.text)
         self.assertEqual(elem.attrib, {'b1': 'false', 'b2': 'false', 'b3': 'false'})
+
+    def test_encode_sub_tree(self):
+        """Test encoding data of a non-root element"""
+        data = {
+            "@id": "PAR",
+            "name": "Pierre-Auguste Renoir",
+            "born": "1841-02-25",
+            "dead": "1919-12-03",
+            "qualification": "painter",
+        }
+        elem = self.col_schema.encode(
+            data,
+            path=".//author",
+            namespaces=self.col_namespaces,
+        )
+        self.assertEqual(
+            etree_tostring(elem),
+            dedent(
+                """\
+                <author id="PAR">
+                    <name>Pierre-Auguste Renoir</name>
+                    <born>1841-02-25</born>
+                    <dead>1919-12-03</dead>
+                    <qualification>painter</qualification>
+                </author>"""
+            )
+        )
+
+    @unittest.skipIf(lxml_etree is None, "The lxml library is not available.")
+    def test_lxml_encode(self):
+        """Test encode with etree_element_class=lxml.etree.Element"""
+        xd = {
+            "@xmlns:col": "http://example.com/ns/collection",
+            "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+            "@xsi:schemaLocation": "http://example.com/ns/collection collection.xsd",
+            "object": [
+                {
+                    "@id": "b0836217463",
+                    "@available": True,
+                    "position": 2,
+                    "title": None,
+                    "year": "1925",
+                    "author": {
+                        "@id": "JM",
+                        "name": "Joan Miró",
+                        "born": "1893-04-20",
+                        "dead": "1983-12-25",
+                        "qualification": "painter, sculptor and ceramicist",
+                    },
+                },
+            ],
+        }
+
+        elem = self.col_schema.encode(
+            xd,
+            path="./col:collection",
+            namespaces=self.col_namespaces,
+            etree_element_class=lxml_etree.Element,
+        )
+
+        self.assertEqual(
+            etree_tostring(elem, namespaces=self.col_namespaces),
+            dedent(
+                """\
+                <col:collection xmlns:col="http://example.com/ns/collection" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://example.com/ns/collection collection.xsd">
+                    <object id="b0836217463" available="true">
+                        <position>2</position>
+                        <title/>
+                        <year>1925</year>
+                        <author id="JM">
+                            <name>Joan Miró</name>
+                            <born>1893-04-20</born>
+                            <dead>1983-12-25</dead>
+                            <qualification>painter, sculptor and ceramicist</qualification>
+                        </author>
+                    </object>
+                </col:collection>"""
+            )
+        )
 
 
 class TestEncoding11(TestEncoding):

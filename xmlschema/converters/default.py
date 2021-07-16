@@ -55,12 +55,13 @@ class XMLSchemaConverter(NamespaceMapper):
     :param strip_namespaces: if set to `True` removes namespace declarations from data and \
     namespace information from names, during decoding or encoding. Defaults to `False`.
     :param preserve_root: if set to `True` the root element is preserved, wrapped into a \
-    single-item dictionary. Applicable only to default converter and to :class:`ParkerConverter`.
+    single-item dictionary. Applicable only to default converter, to \
+    :class:`UnorderedConverter` and to :class:`ParkerConverter`.
     :param force_dict: if set to `True` complex elements with simple content are decoded \
-    with a dictionary also if there are no decoded attributes. Applicable to default converter \
-    only. Defaults to `False`.
+    with a dictionary also if there are no decoded attributes. Applicable only to default \
+    converter and to :class:`UnorderedConverter`. Defaults to `False`.
     :param force_list: if set to `True` child elements are decoded within a list in any case. \
-    Applicable to default converter only. Defaults to `False`.
+    Applicable only to default converter and to :class:`UnorderedConverter`. Defaults to `False`.
 
     :ivar dict: dictionary class to use for decoded data.
     :ivar list: list class to use for decoded data.
@@ -77,7 +78,9 @@ class XMLSchemaConverter(NamespaceMapper):
     dict = dict
     list = list
     etree_element_class = etree_element
-    ns_prefix = None
+
+    __slots__ = ('text_key', 'ns_prefix', 'attr_prefix', 'cdata_prefix',
+                 'indent', 'preserve_root', 'force_dict', 'force_list')
 
     def __init__(self, namespaces=None, dict_class=None, list_class=None,
                  etree_element_class=None, text_key='$', attr_prefix='@',
@@ -93,6 +96,7 @@ class XMLSchemaConverter(NamespaceMapper):
         if etree_element_class is not None:
             self.etree_element_class = etree_element_class
 
+        self.ns_prefix = None
         self.text_key = text_key
         self.attr_prefix = attr_prefix
         self.cdata_prefix = cdata_prefix
@@ -221,7 +225,8 @@ class XMLSchemaConverter(NamespaceMapper):
             else:
                 elem = self.etree_element_class(tag, self.dict(attrib))
         else:
-            nsmap = {prefix if prefix else None: uri for prefix, uri in self._namespaces.items()}
+            nsmap = {prefix if prefix else None: uri
+                     for prefix, uri in self._namespaces.items() if uri}
             elem = self.etree_element_class(tag, nsmap=nsmap)
             elem.attrib.update(attrib)
 
@@ -294,7 +299,12 @@ class XMLSchemaConverter(NamespaceMapper):
                 return self.dict(
                     [(self.map_qname(data.tag), result_dict if result_dict else None)]
                 )
-            return result_dict if result_dict else None
+
+            if not result_dict:
+                return None
+            elif len(result_dict) == 1 and self.text_key in result_dict:
+                return result_dict[self.text_key]
+            return result_dict
 
     def element_encode(self, obj, xsd_element, level=0):
         """
@@ -308,7 +318,10 @@ class XMLSchemaConverter(NamespaceMapper):
         if level != 0:
             tag = xsd_element.name
         else:
-            tag = xsd_element.qualified_name
+            if xsd_element.is_global():
+                tag = xsd_element.qualified_name
+            else:
+                tag = xsd_element.name
             if self.preserve_root and isinstance(obj, MutableMapping):
                 match_local_name = self.strip_namespaces or self.default_namespace
                 match = xsd_element.get_matching_item(obj, self.ns_prefix, match_local_name)
@@ -318,8 +331,8 @@ class XMLSchemaConverter(NamespaceMapper):
         if not isinstance(obj, MutableMapping):
             if xsd_element.type.simple_type is not None:
                 return ElementData(tag, obj, None, {})
-            elif xsd_element.type.mixed and not isinstance(obj, MutableSequence):
-                return ElementData(tag, obj, None, {})
+            elif xsd_element.type.mixed and isinstance(obj, (str, bytes)):
+                return ElementData(tag, None, [(1, obj)], {})
             else:
                 return ElementData(tag, None, obj, {})
 
