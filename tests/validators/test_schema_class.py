@@ -163,7 +163,19 @@ class TestXMLSchema10(XsdValidatorTestCase):
             <xs:element name='foo'>
                 <xs:annotation />
             </xs:element>""")
-        self.assertIsNotNone(schema.elements['foo'].annotation)
+        xsd_element = schema.elements['foo']
+        self.assertIsNone(xsd_element._annotation)  # lazy annotation
+        self.assertIsNotNone(xsd_element.annotation)
+        self.assertIs(xsd_element.annotation, xsd_element._annotation)
+
+        self.check_schema("""
+        <xs:simpleType name='Magic'>
+            <xs:annotation />
+            <xs:annotation />
+            <xs:restriction base='xs:string'>
+                <xs:enumeration value='A'/>
+            </xs:restriction>
+        </xs:simpleType>""", XMLSchemaParseError)
 
         schema = self.check_schema("""
         <xs:simpleType name='Magic'>
@@ -174,16 +186,67 @@ class TestXMLSchema10(XsdValidatorTestCase):
                 <xs:enumeration value='A'/>
             </xs:restriction>
         </xs:simpleType>""")
-        self.assertIsNotNone(schema.types["Magic"].annotation)
 
-        self.check_schema("""
-        <xs:simpleType name='Magic'>
-            <xs:annotation />
-            <xs:annotation />
-            <xs:restriction base='xs:string'>
-                <xs:enumeration value='A'/>
-            </xs:restriction>
-        </xs:simpleType>""", XMLSchemaParseError)
+        xsd_type = schema.types["Magic"]
+        self.assertIsNotNone(xsd_type._annotation)      # xs:simpleType annotations are not lazy parsed
+        self.assertEqual(str(xsd_type.annotation), ' stuff ')
+
+    def test_annotation_string(self):
+        schema = self.check_schema("""
+            <xs:element name='A'>
+                <xs:annotation>
+                    <xs:documentation>A element info</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name='B'>
+                <xs:annotation>
+                    <xs:documentation>B element extended info, line1</xs:documentation>
+                    <xs:documentation>B element extended info, line2</xs:documentation>
+                </xs:annotation>
+            </xs:element>""")
+
+        xsd_element = schema.elements['A']
+        self.assertEqual(str(xsd_element.annotation), 'A element info')
+        self.assertEqual(repr(xsd_element.annotation), "XsdAnnotation('A element info')")
+
+        xsd_element = schema.elements['B']
+        self.assertEqual(str(xsd_element.annotation),
+                         'B element extended info, line1\nB element extended info, line2')
+        self.assertEqual(repr(xsd_element.annotation),
+                         "XsdAnnotation('B element extended info, line1\\nB element')")
+
+    def test_schema_annotations(self):
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="root"/>
+            </xs:schema>"""))
+
+        self.assertIsNone(schema._annotations)
+        annotations = schema.annotations
+        self.assertListEqual(annotations, [])
+        self.assertIs(annotations, schema.annotations)
+
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:annotation>
+                    <xs:documentation>First annotation</xs:documentation>
+                </xs:annotation>
+                <xs:annotation>
+                    <xs:documentation>Second annotation</xs:documentation>
+                </xs:annotation>
+                <xs:element name="root"/>
+                <xs:annotation>
+                    <xs:documentation>Third annotation</xs:documentation>
+                </xs:annotation>
+            </xs:schema>"""))
+
+        self.assertIsNone(schema._annotations)
+        annotations = schema.annotations
+        self.assertEqual(len(annotations), 3)
+        self.assertEqual(repr(annotations[0]), "XsdAnnotation('First annotation')")
+        self.assertEqual(repr(annotations[1]), "XsdAnnotation('Second annotation')")
+        self.assertEqual(repr(annotations[2]), "XsdAnnotation('Third annotation')")
+        self.assertIs(annotations, schema.annotations)
 
     def test_base_schemas(self):
         xsd_file = os.path.join(SCHEMAS_DIR, 'XML/xml_minimal.xsd')

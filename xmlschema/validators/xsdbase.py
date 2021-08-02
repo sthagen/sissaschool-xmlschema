@@ -13,6 +13,8 @@ This module contains base functions and classes XML Schema components.
 import re
 from typing import Optional
 
+import elementpath
+
 from ..exceptions import XMLSchemaValueError, XMLSchemaTypeError
 from ..names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, XML_LANG, \
     XSD_ANY_TYPE, XSD_ANY_SIMPLE_TYPE, XSD_ANY_ATOMIC_TYPE, XSD_ID, XSD_QNAME, \
@@ -217,9 +219,9 @@ class XsdComponent(XsdValidator):
     parent = None
     name = None
     ref = None
-    annotation = None
     qualified = True
     redefine = None
+    _annotation = None
 
     def __init__(self, elem, schema, parent=None, name: Optional[str] = None):
         super(XsdComponent, self).__init__(schema.validation)
@@ -232,14 +234,18 @@ class XsdComponent(XsdValidator):
         self.elem = elem
 
     def __setattr__(self, name, value):
-        super(XsdComponent, self).__setattr__(name, value)
         if name == 'elem':
             if value.tag not in self._ADMITTED_TAGS:
                 msg = "wrong XSD element {!r} for {!r}, must be one of {!r}"
                 raise XMLSchemaValueError(
                     msg.format(value.tag, self.__class__, self._ADMITTED_TAGS)
                 )
+            super(XsdComponent, self).__setattr__(name, value)
+            if self.errors:
+                self.errors.clear()
             self._parse()
+        else:
+            super(XsdComponent, self).__setattr__(name, value)
 
     @property
     def xsd_version(self):
@@ -295,6 +301,21 @@ class XsdComponent(XsdValidator):
         """Property that references to the xs:anyAtomicType instance of the global maps."""
         return self.maps.types[XSD_ANY_ATOMIC_TYPE]
 
+    @property
+    def annotation(self):
+        if '_annotation' not in self.__dict__:
+            for child in self.elem:
+                if child.tag == XSD_ANNOTATION:
+                    self._annotation = XsdAnnotation(child, self.schema, self)
+                    break
+                elif not callable(child.tag):
+                    self._annotation = None
+                    break
+            else:
+                self._annotation = None
+
+        return self._annotation
+
     def __repr__(self):
         if self.ref is not None:
             return '%s(ref=%r)' % (self.__class__.__name__, self.prefixed_name)
@@ -302,13 +323,7 @@ class XsdComponent(XsdValidator):
             return '%s(name=%r)' % (self.__class__.__name__, self.prefixed_name)
 
     def _parse(self):
-        del self.errors[:]
-        for child in self.elem:
-            if child.tag == XSD_ANNOTATION:
-                self.annotation = XsdAnnotation(child, self.schema, self)
-                break
-            elif not callable(child.tag):
-                break
+        pass
 
     def _parse_reference(self):
         """
@@ -555,12 +570,19 @@ class XsdAnnotation(XsdComponent):
     """
     _ADMITTED_TAGS = {XSD_ANNOTATION}
 
+    annotation = None
+
+    def __repr__(self):
+        return '%s(%r)' % (self.__class__.__name__, str(self)[:40])
+
+    def __str__(self):
+        return '\n'.join(elementpath.select(self.elem, '*/fn:string()'))
+
     @property
     def built(self):
         return True
 
     def _parse(self):
-        del self.errors[:]
         self.appinfo = []
         self.documentation = []
         for child in self.elem:
