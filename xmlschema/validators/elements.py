@@ -13,7 +13,7 @@ This module contains classes for XML Schema elements, complex types and model gr
 import warnings
 from decimal import Decimal
 from types import GeneratorType
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 from elementpath import XPath2Parser, ElementPathError, XPathContext
 from elementpath.datatypes import AbstractDateTime, Duration, AbstractBinary
 
@@ -31,11 +31,14 @@ from ..xpath import XMLSchemaProxy, ElementPathMixin, XPathElement
 from .exceptions import XMLSchemaValidationError, XMLSchemaTypeTableWarning
 from .helpers import get_xsd_derivation_attribute
 from .xsdbase import XSD_TYPE_DERIVATIONS, XSD_ELEMENT_DERIVATIONS, \
-    XsdComponent, XsdType, ValidationMixin
+    XsdComponent, ValidationMixin
 from .particles import ParticleMixin
 from .models import OccursCounter
 from .identities import IdentityXPathContext, XsdIdentity, XsdKeyref
 from .wildcards import XsdAnyElement
+
+if TYPE_CHECKING:
+    from .groups import XsdGroup
 
 
 class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin):
@@ -64,6 +67,8 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
           Content: (annotation?, ((simpleType | complexType)?, (unique | key | keyref)*))
         </element>
     """
+    name: str
+    parent: 'XsdGroup'
     abstract = False
     nillable = False
     qualified = False
@@ -90,7 +95,7 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
             self.occurs
         )
 
-    def __setattr__(self, name: str, value: Optional[XsdType]):
+    def __setattr__(self, name: str, value: Any):
         if name == "type":
             try:
                 self.attributes = value.attributes
@@ -219,9 +224,9 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
             if child is None:
                 self.type = self.any_type
             elif child.tag == XSD_COMPLEX_TYPE:
-                self.type = self.schema.BUILDERS.complex_type_class(child, self.schema, self)
+                self.type = self.schema.xsd_complex_type_class(child, self.schema, self)
             elif child.tag == XSD_SIMPLE_TYPE:
-                self.type = self.schema.BUILDERS.simple_type_factory(child, self.schema, self)
+                self.type = self.schema.simple_type_factory(child, self.schema, self)
             else:
                 self.type = self.any_type
 
@@ -254,11 +259,11 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
         self.identities = {}
         for child in self.elem:
             if child.tag == XSD_UNIQUE:
-                constraint = self.schema.BUILDERS.unique_class(child, self.schema, self)
+                constraint = self.schema.xsd_unique_class(child, self.schema, self)
             elif child.tag == XSD_KEY:
-                constraint = self.schema.BUILDERS.key_class(child, self.schema, self)
+                constraint = self.schema.xsd_key_class(child, self.schema, self)
             elif child.tag == XSD_KEYREF:
-                constraint = self.schema.BUILDERS.keyref_class(child, self.schema, self)
+                constraint = self.schema.xsd_keyref_class(child, self.schema, self)
             else:
                 # Invalid tags already caught by validation against the meta-schema
                 continue
@@ -270,7 +275,7 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                 continue
 
             try:
-                if child != self.maps.identities[constraint.name]:
+                if child != self.maps.identities[constraint.name].elem:
                     self.parse_error("duplicated identity constraint %r:" % constraint.name, child)
             except KeyError:
                 self.maps.identities[constraint.name] = constraint
@@ -478,7 +483,7 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
             if ns == self.target_namespace:
                 schema = self.schema.include_schema(url, self.schema.base_url)
             else:
-                schema = self.schema.import_namespace(ns, url, self.schema.base_url)
+                schema = self.schema.import_schema(ns, url, self.schema.base_url)
 
             if not schema.built:
                 reason = "dynamic loaded schema change the assessment"
@@ -780,8 +785,8 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                 yield self.validation_error(validation, err, elem, **kwargs)
             else:
                 if isinstance(result, GeneratorType):
-                    for err in result:
-                        yield self.validation_error(validation, err, elem, **kwargs)
+                    for error in result:
+                        yield self.validation_error(validation, error, elem, **kwargs)
 
         # Disable collect for out of scope identities and check key references
         if 'max_depth' not in kwargs:
@@ -789,8 +794,8 @@ class XsdElement(XsdComponent, ValidationMixin, ParticleMixin, ElementPathMixin)
                 counter = identities[identity]
                 counter.enabled = False
                 if isinstance(identity, XsdKeyref):
-                    for err in counter.iter_errors(identities):
-                        yield self.validation_error(validation, err, elem, **kwargs)
+                    for error in counter.iter_errors(identities):
+                        yield self.validation_error(validation, error, elem, **kwargs)
         elif level:
             self.stop_identities(identities)
 
@@ -1256,6 +1261,7 @@ class XsdAlternative(XsdComponent):
           Content: (annotation?, (simpleType | complexType)?)
         </alternative>
     """
+    parent: XsdElement
     type = None
     path = None
     token = None
@@ -1312,9 +1318,9 @@ class XsdAlternative(XsdComponent):
                     self.parse_error("missing 'type' attribute")
                     self.type = self.any_type
                 elif child.tag == XSD_COMPLEX_TYPE:
-                    self.type = self.schema.BUILDERS.complex_type_class(child, self.schema, self)
+                    self.type = self.schema.xsd_complex_type_class(child, self.schema, self)
                 else:
-                    self.type = self.schema.BUILDERS.simple_type_factory(child, self.schema, self)
+                    self.type = self.schema.simple_type_factory(child, self.schema, self)
 
                 if not self.type.is_derived(self.parent.type):
                     msg = "declared type is not derived from {!r}"

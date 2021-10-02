@@ -17,8 +17,7 @@ from ..exceptions import XMLSchemaValueError
 from .particles import ParticleMixin, ModelGroup
 
 
-def distinguishable_paths(path1: List[Union[ParticleMixin, ModelGroup]],
-                          path2: List[Union[ParticleMixin, ModelGroup]]):
+def distinguishable_paths(path1: List[ModelGroup], path2: List[ModelGroup]):
     """
     Checks if two model paths are distinguishable in a deterministic way, without looking forward
     or backtracking. The arguments are lists containing paths from the base group of the model to
@@ -97,8 +96,8 @@ class ModelVisitor:
     """
     def __init__(self, root: ModelGroup):
         self.root = root
-        self.occurs = Counter()
-        self._groups: List[Tuple[ModelGroup, int, bool]] = []
+        self.occurs: Counter = Counter()
+        self._groups: List[Tuple[ModelGroup, Iterator[ParticleMixin], bool]] = []
         self.element = None
         self.group = root
         self.items = self.iter_group()
@@ -138,6 +137,7 @@ class ModelVisitor:
         Returns the expected elements of the current and descendant groups.
         """
         expected = []
+        items: Union[ModelGroup, Iterator[ParticleMixin]]
         if self.group.model == 'choice':
             items = self.group
         elif self.group.model == 'all':
@@ -178,7 +178,7 @@ class ModelVisitor:
 
         :param match: provides current element match.
         """
-        def stop_item(item: ParticleMixin) -> bool:
+        def stop_item(item: Union[ParticleMixin, ModelGroup]) -> bool:
             """
             Stops element or group matching, incrementing current group counter.
 
@@ -326,7 +326,7 @@ class ModelVisitor:
             self.restart()
         return [(name, value) for name, value in self.iter_unordered_content(content)]
 
-    def iter_unordered_content(self, content):
+    def iter_unordered_content(self, content, default_namespace=None):
         """
         Takes an unordered content stored in a dictionary of lists and yields the
         content elements sorted with the ordering defined by the model. Character
@@ -341,6 +341,7 @@ class ModelVisitor:
         or an iterable composed of couples of name and value. In case of a \
         dictionary the values must be lists where each item is the content \
         of a single element.
+        :param default_namespace: the default namespace to apply for matching names.
         :return: yields of a sequence of the Element being encoded's children.
         """
         if isinstance(content, dict):
@@ -359,7 +360,7 @@ class ModelVisitor:
 
         while self.element is not None and consumable_content:  # pragma: no cover
             for name in consumable_content:
-                if self.element.is_matching(name):
+                if self.element.is_matching(name, default_namespace, group=self.group):
                     yield name, consumable_content[name].popleft()
                     if not consumable_content[name]:
                         del consumable_content[name]
@@ -383,7 +384,7 @@ class ModelVisitor:
         while cdata_content:
             yield cdata_content.pop()
 
-    def iter_collapsed_content(self, content):
+    def iter_collapsed_content(self, content, default_namespace=None):
         """
         Iterates a content stored in a sequence of couples *(name, value)*, yielding
         items in the same order of the sequence, except for repetitions of the same
@@ -396,6 +397,7 @@ class ModelVisitor:
         collapses the children with the same tag into a list (eg. BadgerFish).
 
         :param content: an iterable containing couples of names and values.
+        :param default_namespace: the default namespace to apply for matching names.
         :return: yields of a sequence of the Element being encoded's children.
         """
         prev_name = None
@@ -407,7 +409,7 @@ class ModelVisitor:
                 continue
 
             while self.element is not None:
-                if self.element.is_matching(name):
+                if self.element.is_matching(name, default_namespace, group=self.group):
                     yield name, value
                     prev_name = name
                     for _ in self.advance(True):
@@ -415,7 +417,7 @@ class ModelVisitor:
                     break
 
                 for key in unordered_content:
-                    if self.element.is_matching(key):
+                    if self.element.is_matching(key, default_namespace, group=self.group):
                         break
                 else:
                     if prev_name == name:

@@ -13,7 +13,7 @@ This module contains classes for other XML Schema identity constraints.
 import re
 import math
 from collections import Counter
-from typing import Dict, Union
+from typing import TYPE_CHECKING, Dict, Optional, Pattern, Union
 from elementpath import XPath2Parser, ElementPathError, XPathContext, translate_pattern
 
 from ..exceptions import XMLSchemaTypeError, XMLSchemaValueError
@@ -23,15 +23,19 @@ from ..xpath import iter_schema_nodes
 from .xsdbase import XsdComponent
 from .attributes import XsdAttribute
 
+if TYPE_CHECKING:
+    from .elements import XsdElement
 
-XSD_IDENTITY_XPATH_SYMBOLS = {
+
+XSD_IDENTITY_XPATH_SYMBOLS = frozenset((
     'processing-instruction', 'following-sibling', 'preceding-sibling',
     'ancestor-or-self', 'attribute', 'following', 'namespace', 'preceding',
     'ancestor', 'position', 'comment', 'parent', 'child', 'false', 'text', 'node',
-    'true', 'last', 'not', 'and', 'mod', 'div', 'or', '..', '//', '!=', '<=', '>=', '(', ')',
-    '[', ']', '.', '@', ',', '/', '|', '*', '-', '=', '+', '<', '>', ':', '(end)', '(name)',
-    '(string)', '(float)', '(decimal)', '(integer)', '::', '{', '}',
-}
+    'true', 'last', 'not', 'and', 'mod', 'div', 'or', '..', '//', '!=', '<=', '>=',
+    '(', ')', '[', ']', '.', '@', ',', '/', '|', '*', '-', '=', '+', '<', '>', ':',
+    '(end)', '(unknown)', '(invalid)', '(name)', '(string)', '(float)', '(decimal)',
+    '(integer)', '::', '{', '}',
+))
 
 
 # XSD identities use a restricted parser and a context for iterate element
@@ -43,7 +47,8 @@ class IdentityXPathContext(XPathContext):
 
 class IdentityXPathParser(XPath2Parser):
     symbol_table = {
-        k: v for k, v in XPath2Parser.symbol_table.items() if k in XSD_IDENTITY_XPATH_SYMBOLS
+        k: v for k, v in XPath2Parser.symbol_table.items()
+        if k in XSD_IDENTITY_XPATH_SYMBOLS
     }
     SYMBOLS = XSD_IDENTITY_XPATH_SYMBOLS
 
@@ -52,7 +57,7 @@ class XsdSelector(XsdComponent):
     """Class for defining an XPath selector for an XSD identity constraint."""
     _ADMITTED_TAGS = {XSD_SELECTOR}
     xpath_default_namespace = ''
-    pattern = translate_pattern(
+    pattern: Union[str, Pattern] = translate_pattern(
         r"(\.//)?(((child::)?((\i\c*:)?(\i\c*|\*)))|\.)(/(((child::)?"
         r"((\i\c*:)?(\i\c*|\*)))|\.))*(\|(\.//)?(((child::)?((\i\c*:)?"
         r"(\i\c*|\*)))|\.)(/(((child::)?((\i\c*:)?(\i\c*|\*)))|\.))*)*",
@@ -145,6 +150,7 @@ class XsdIdentity(XsdComponent):
     :ivar selector: the XPath selector of the identity constraint.
     :ivar fields: a list containing the XPath field selectors of the identity constraint.
     """
+    parent: 'XsdElement'
     selector = None
     elements = None  # XSD elements bound by selector (for speed-up and lazy mode)
     fields = ()
@@ -304,7 +310,7 @@ class XsdKeyref(XsdIdentity):
     or in a descendant element.
     """
     _ADMITTED_TAGS = {XSD_KEYREF}
-    refer = None
+    refer: Optional[Union[str, XsdKey]] = None
     refer_path = '.'
 
     def _parse(self):
@@ -395,8 +401,8 @@ class Xsd11Keyref(XsdKeyref):
 
 class IdentityCounter:
 
-    def __init__(self, identity: Union[XsdKey, XsdKeyref], enabled=True):
-        self.counter = Counter()
+    def __init__(self, identity: XsdIdentity, enabled=True):
+        self.counter: Counter = Counter()
         self.identity = identity
         self.enabled = enabled
 
@@ -415,11 +421,12 @@ class IdentityCounter:
 
 
 class KeyrefCounter(IdentityCounter):
+    identity: XsdKeyref
 
     def increase(self, fields: tuple):
         self.counter[fields] += 1
 
-    def iter_errors(self, identities: Dict[Union[XsdKey, XsdKeyref],
+    def iter_errors(self, identities: Dict[Union[XsdKey, XsdKeyref, str, None],
                                            Union['IdentityCounter', 'KeyrefCounter']]):
         refer_values = identities[self.identity.refer].counter
 

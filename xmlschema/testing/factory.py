@@ -107,6 +107,10 @@ def get_test_line_args_parser():
         help="Timeout for fetching resources (default=300)."
     )
     parser.add_argument(
+        '--validation-only', action="store_true", default=False,
+        help="Skip decode/encode tests on XML data."
+    )
+    parser.add_argument(
         '--lax-encode', action="store_true", default=False,
         help="Use lax mode on encode checks (for cases where test data uses default or "
              "fixed values or some test data are skipped by wildcards processContents). "
@@ -124,7 +128,8 @@ def get_test_line_args_parser():
     return parser
 
 
-def factory_tests(test_class_builder, testfiles, suffix, check_with_lxml=False, codegen=False):
+def factory_tests(test_class_builder, testfiles, suffix,
+                  check_with_lxml=False, codegen=False, verbosity=1):
     """
     Factory function for file based schema/validation cases.
 
@@ -136,6 +141,7 @@ def factory_tests(test_class_builder, testfiles, suffix, check_with_lxml=False, 
     :param codegen: if `True` is provided checks code generation with XML data \
     bindings module for all tests. For default is `False` and code generation \
     is tested only for the cases where the same option is provided.
+    :param verbosity: the unittest's verbosity, can be 0, 1 or 2.
     :return: a list of test classes.
     """
     test_classes = {}
@@ -204,6 +210,9 @@ def factory_tests(test_class_builder, testfiles, suffix, check_with_lxml=False, 
             )
 
         test_classes[test_class.__name__] = test_class
+        if verbosity == 2:
+            print(f"Create case {test_class.__name__} for file {os.path.relpath(test_file)}")
+
         logger.debug("Add XSD %s test class %r.", test_args.version, test_class.__name__)
 
     if line_buffer:

@@ -12,13 +12,14 @@ This module contains classes for XML Schema model groups.
 """
 import warnings
 from collections.abc import MutableMapping, MutableSequence
+from typing import TYPE_CHECKING, Union, Optional
 
 from .. import limits
 from ..exceptions import XMLSchemaValueError
 from ..names import XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE, XSD_ELEMENT, \
     XSD_ANY, XSI_TYPE, XSD_ANY_TYPE, XSD_ANNOTATION
 from ..etree import etree_element
-from ..helpers import get_qname, local_name, not_whitespace, raw_xml_encode
+from ..helpers import get_qname, local_name, raw_xml_encode
 
 from .exceptions import XMLSchemaModelError, XMLSchemaModelDepthError, \
     XMLSchemaValidationError, XMLSchemaChildrenValidationError, \
@@ -28,6 +29,9 @@ from .particles import ParticleMixin, ModelGroup
 from .elements import XsdElement
 from .wildcards import XsdAnyElement, Xsd11AnyElement
 from .models import ModelVisitor, distinguishable_paths
+
+if TYPE_CHECKING:
+    from .complex_types import XsdComplexType
 
 ANY_ELEMENT = etree_element(
     XSD_ANY,
@@ -77,6 +81,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
           Content: (annotation?, (element | group | choice | sequence | any)*)
         </sequence>
     """
+    parent: Optional[Union['XsdComplexType', 'XsdGroup']]
     mixed = False
     restriction = None
     interleave = None  # an Xsd11AnyElement in case of XSD 1.1 openContent with mode='interleave'
@@ -84,7 +89,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
 
     _ADMITTED_TAGS = {XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE}
 
-    def __init__(self, elem, schema, parent):
+    def __init__(self, elem, schema, parent: Optional[Union['XsdComplexType', 'XsdGroup']] = None):
         self._group = []
         if parent is not None and parent.mixed:
             self.mixed = parent.mixed
@@ -134,7 +139,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
                                  xsd_group[0])
                 self.model = 'sequence'
                 self.mixed = True
-                self.append(self.schema.BUILDERS.any_element_class(ANY_ELEMENT, self.schema, self))
+                self.append(self.schema.xsd_any_class(ANY_ELEMENT, self.schema, self))
             else:
                 self.model = xsd_group.model
                 if self.model == 'all':
@@ -242,7 +247,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
         return error
 
     def build(self):
-        element_class = self.schema.BUILDERS.element_class
+        element_class = self.schema.xsd_element_class
         for k in range(len(self._group)):
             if isinstance(self._group[k], tuple):
                 elem, schema = self._group[k]
@@ -657,7 +662,8 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
 
         if not self.mixed:
             # Check element CDATA
-            if not_whitespace(elem.text) or any(not_whitespace(child.tail) for child in elem):
+            if elem.text and elem.text.strip() or \
+                    any(child.tail and child.tail.strip() for child in elem):
                 if len(self) == 1 and isinstance(self[0], XsdAnyElement):
                     pass  # [XsdAnyElement()] equals to an empty complexType declaration
                 else:
@@ -816,14 +822,18 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
         if element_data.content is None:
             content = []
         elif isinstance(element_data.content, MutableMapping) or kwargs.get('unordered'):
-            content = ModelVisitor(self).iter_unordered_content(element_data.content)
+            content = ModelVisitor(self).iter_unordered_content(
+                element_data.content, default_namespace
+            )
         elif not isinstance(element_data.content, MutableSequence):
             wrong_content_type = True
             content = []
         elif converter.losslessly:
             content = element_data.content
         else:
-            content = ModelVisitor(self).iter_collapsed_content(element_data.content)
+            content = ModelVisitor(self).iter_collapsed_content(
+                element_data.content, default_namespace
+            )
 
         for index, (name, value) in enumerate(content):
             if isinstance(name, int):
@@ -893,7 +903,7 @@ class XsdGroup(XsdComponent, ModelGroup, ValidationMixin):
             else:
                 children[-1].tail = children[-1].tail.strip() + (padding[:-indent] or '\n')
 
-        cdata_not_allowed = not self.mixed and not_whitespace(text) and self and \
+        cdata_not_allowed = not self.mixed and text and text.strip() and self and \
             (len(self) > 1 or not isinstance(self[0], XsdAnyElement))
 
         if errors or cdata_not_allowed or wrong_content_type:

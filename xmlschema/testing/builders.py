@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #
 # Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
 # All rights reserved.
@@ -17,11 +16,13 @@ import logging
 import importlib
 import tempfile
 import warnings
+from typing import Optional, Type
 
 try:
     import lxml.etree as lxml_etree
 except ImportError:
-    lxml_etree = lxml_etree_element = None
+    lxml_etree = None  # type: ignore[assignment]
+    lxml_etree_element = None
 else:
     lxml_etree_element = lxml_etree.Element
 
@@ -41,7 +42,7 @@ from xmlschema.dataobjects import DataElementConverter, DataBindingConverter, Da
 try:
     from xmlschema.extras.codegen import PythonGenerator
 except ImportError:
-    PythonGenerator = None
+    PythonGenerator: Optional[Type] = None  # type: ignore[no-redef]
 
 from .helpers import iter_nested_items, etree_elements_assert_equal
 from .case_class import XsdValidatorTestCase
@@ -238,6 +239,7 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
     inspect = test_args.inspect
     locations = test_args.locations
     defuse = test_args.defuse
+    validation_only = test_args.validation_only
     lax_encode = test_args.lax_encode
     debug_mode = test_args.debug
     codegen = test_args.codegen
@@ -606,15 +608,16 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
                     os.chdir(cwd)
 
         def test_xml_document_validation(self):
-            self.check_decoding_with_element_tree()
-            if not inspect:
-                self.check_schema_serialization()
+            if not validation_only:
+                self.check_decoding_with_element_tree()
+                if not inspect:
+                    self.check_schema_serialization()
 
-            if not self.errors:
-                self.check_data_conversion_with_element_tree()
+                if not self.errors:
+                    self.check_data_conversion_with_element_tree()
 
-            if lxml_etree is not None:
-                self.check_data_conversion_with_lxml()
+                if lxml_etree is not None:
+                    self.check_data_conversion_with_lxml()
 
             self.check_iter_errors()
             self.check_validate_and_is_valid_api()
@@ -623,7 +626,7 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
 
             # Test validation with XML data bindings only for instances and
             # schemas that do not have errors and imports without locations
-            if codegen and PythonGenerator is not None and \
+            if not validation_only and codegen and PythonGenerator is not None and \
                     not self.errors and not self.schema.all_errors and \
                     all('schemaLocation' in e.attrib
                         for e in self.schema.root

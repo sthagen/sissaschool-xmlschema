@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2021, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -10,11 +10,10 @@
 import re
 from collections import Counter
 from decimal import Decimal
-from typing import Callable, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 from .exceptions import XMLSchemaValueError, XMLSchemaTypeError
 from .names import XSI_SCHEMA_LOCATION, XSI_NONS_SCHEMA_LOCATION
-
-from xml.etree.ElementTree import Element
+from .etree import ElementType, etree_element
 
 ###
 # Helper functions for QNames
@@ -38,7 +37,7 @@ def get_namespace(qname: str, namespaces: Optional[Dict[str, str]] = None) -> st
         qname = get_extended_qname(qname, namespaces)
 
     try:
-        return NAMESPACE_PATTERN.match(qname).group(1)
+        return NAMESPACE_PATTERN.match(qname).group(1)  # type: ignore[union-attr]
     except (AttributeError, TypeError):
         return ''
 
@@ -75,9 +74,7 @@ def local_name(qname: str) -> str:
     except ValueError:
         raise XMLSchemaValueError("the argument 'qname' has a wrong format: %r" % qname)
     except TypeError:
-        if qname is None:
-            return qname
-        raise XMLSchemaTypeError("the argument 'qname' must be a string-like object or None")
+        raise XMLSchemaTypeError("the argument 'qname' must be a string")
     else:
         return qname
 
@@ -151,9 +148,9 @@ def is_etree_document(obj: object) -> bool:
     return hasattr(obj, 'getroot') and hasattr(obj, 'parse') and hasattr(obj, 'iter')
 
 
-def etree_iterpath(elem: Element, tag: Optional[str] = None,
-                   path='.', namespaces: Optional[Dict[str, str]] = None,
-                   add_position=False) -> Iterator[Tuple[Element, str]]:
+def etree_iterpath(elem: ElementType, tag: Optional[str] = None,
+                   path: str = '.', namespaces: Optional[Dict[str, str]] = None,
+                   add_position: bool = False) -> Iterator[Tuple[ElementType, str]]:
     """
     Creates an iterator for the element and its subelements that yield elements and paths.
     If tag is not `None` or '*', only elements whose matches tag are returned from the iterator.
@@ -172,10 +169,10 @@ def etree_iterpath(elem: Element, tag: Optional[str] = None,
         yield elem, path
 
     if add_position:
-        children_tags = Counter([e.tag for e in elem])
-        positions = Counter([t for t in children_tags if children_tags[t] > 1])
+        children_tags = Counter(e.tag for e in elem)
+        positions = Counter(t for t in children_tags if children_tags[t] > 1)
     else:
-        positions = ()
+        positions = Counter()
 
     for child in elem:
         if callable(child.tag):
@@ -194,8 +191,12 @@ def etree_iterpath(elem: Element, tag: Optional[str] = None,
         yield from etree_iterpath(child, tag, child_path, namespaces, add_position)
 
 
-def etree_getpath(elem: Element, root: Element, namespaces: Optional[Dict[str, str]] = None,
-                  relative=True, add_position=False, parent_path=False) -> Optional[str]:
+def etree_getpath(elem: ElementType,
+                  root: ElementType,
+                  namespaces: Optional[Dict[str, str]] = None,
+                  relative: bool = True,
+                  add_position: bool = False,
+                  parent_path: bool = False) -> Optional[str]:
     """
     Returns the XPath path from *root* to descendant *elem* element.
 
@@ -222,9 +223,10 @@ def etree_getpath(elem: Element, root: Element, namespaces: Optional[Dict[str, s
         for e, path in etree_iterpath(root, None, path, namespaces, add_position):
             if elem in e:
                 return path
+    return None
 
 
-def etree_iter_location_hints(elem: Element) -> Iterator[Element]:
+def etree_iter_location_hints(elem: ElementType) -> Iterator[Tuple[Any, Any]]:
     """Yields schema location hints contained in the attributes of an element."""
     if XSI_SCHEMA_LOCATION in elem.attrib:
         locations = elem.attrib[XSI_SCHEMA_LOCATION].split()
@@ -236,7 +238,8 @@ def etree_iter_location_hints(elem: Element) -> Iterator[Element]:
             yield '', url
 
 
-def prune_etree(root: Element, selector: Callable[[Element], bool]) -> Optional[bool]:
+def prune_etree(root: etree_element, selector: Callable[[etree_element], bool]) \
+        -> Optional[bool]:
     """
     Removes from an tree structure the elements that verify the selector
     function. The checking and eventual removals are performed using a
@@ -246,7 +249,7 @@ def prune_etree(root: Element, selector: Callable[[Element], bool]) -> Optional[
     :param selector: the single argument function to apply on each visited node.
     :return: `True` if the root node verify the selector function, `None` otherwise.
     """
-    def _prune_subtree(elem):
+    def _prune_subtree(elem: etree_element) -> None:
         for child in elem[:]:
             if selector(child):
                 elem.remove(child)
@@ -258,10 +261,7 @@ def prune_etree(root: Element, selector: Callable[[Element], bool]) -> Optional[
         del root[:]
         return True
     _prune_subtree(root)
-
-
-def not_whitespace(s: Optional[str]) -> bool:
-    return s and s.strip()
+    return None
 
 
 def count_digits(number: Union[str, bytes, int, float, Decimal]) -> Tuple[int, int]:
@@ -280,9 +280,9 @@ def count_digits(number: Union[str, bytes, int, float, Decimal]) -> Tuple[int, i
         number = str(number).lstrip('-+')
 
     if 'E' in number:
-        significand, _, exponent = number.partition('E')
+        significand, _, _exponent = number.partition('E')
     elif 'e' in number:
-        significand, _, exponent = number.partition('e')
+        significand, _, _exponent = number.partition('e')
     elif '.' not in number:
         return len(number.lstrip('0')), 0
     else:
@@ -290,7 +290,7 @@ def count_digits(number: Union[str, bytes, int, float, Decimal]) -> Tuple[int, i
         return len(integer_part.lstrip('0')), len(decimal_part.rstrip('0'))
 
     significand = significand.strip('0')
-    exponent = int(exponent)
+    exponent = int(_exponent)
 
     num_digits = len(significand) - 1 if '.' in significand else len(significand)
     if exponent > 0:
@@ -304,12 +304,13 @@ def strictly_equal(obj1: object, obj2: object) -> bool:
     return obj1 == obj2 and type(obj1) is type(obj2)
 
 
-def raw_xml_encode(value: Optional[Union[str, bytes, bool, int, float, Decimal, list, tuple]]) \
-        -> Optional[str]:
+def raw_xml_encode(
+    value: Optional[Union[str, bytes, bool, int, float, Decimal, List[str], Tuple[str]]]
+) -> Optional[str]:
     """Encodes a simple value to XML."""
     if isinstance(value, bool):
         return 'true' if value else 'false'
     elif isinstance(value, (list, tuple)):
         return ' '.join(str(e) for e in value)
-    elif value is not None:
-        return str(value)
+    else:
+        return str(value) if value is not None else None

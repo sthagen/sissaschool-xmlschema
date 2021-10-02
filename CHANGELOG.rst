@@ -2,6 +2,17 @@
 CHANGELOG
 *********
 
+`v1.8.0`_ (2021-09-27)
+======================
+* Refactor XMLSchemaMeta deprecating BUILDER attribute
+* Extend type annotations to package API
+* Add static typing tests with checked mypy runs
+
+`v1.7.1`_ (2021-09-03)
+======================
+* Activate mypy checks for package
+* Fix for issues #257 and #259
+
 `v1.7.0`_ (2021-08-02)
 ======================
 * Make XSD annotation parsing lazy
@@ -464,3 +475,5 @@ v0.9.6 (2017-05-05)
 .. _v1.6.3: https://github.com/brunato/xmlschema/compare/v1.6.2...v1.6.3
 .. _v1.6.4: https://github.com/brunato/xmlschema/compare/v1.6.3...v1.6.4
 .. _v1.7.0: https://github.com/brunato/xmlschema/compare/v1.6.4...v1.7.0
+.. _v1.7.1: https://github.com/brunato/xmlschema/compare/v1.7.0...v1.7.1
+.. _v1.8.0: https://github.com/brunato/xmlschema/compare/v1.7.1...v1.8.0
