@@ -16,6 +16,7 @@ import fileinput
 import os
 import re
 import importlib
+import pathlib
 
 
 class TestPackaging(unittest.TestCase):
@@ -30,12 +31,10 @@ class TestPackaging(unittest.TestCase):
         )
         cls.get_version = re.compile(r"(?:\brelease|__version__)(?:\s*=\s*)(\'[^\']*\'|\"[^\"]*\")")
 
-    def test_missing_debug_statements(self):
+    def test_forgotten_debug_statements(self):
         # Exclude explicit debug statements written in the code
         exclude = {
-            'regex.py': [240, 241],
-            'codepoints.py': [534],
-            'cli.py': [117, 133, 137, 140],
+            'cli.py': ['print('],
         }
 
         message = "\nFound a debug missing statement at line %d or file %r: %r"
@@ -53,7 +52,7 @@ class TestPackaging(unittest.TestCase):
                 continue
 
             match = self.missing_debug.search(line)
-            if match is None or filename.endswith('/cli.py') and match.group(0) == 'print(':
+            if match is None or match.group(0) in file_excluded:
                 continue
             self.assertIsNone(match, message % (lineno, filename, match.group(0)))
 
@@ -81,6 +80,19 @@ class TestPackaging(unittest.TestCase):
                         version == match.group(1).strip('\'\"'),
                         message % (lineno, filename, match.group(1).strip('\'\"'), version)
                     )
+
+    def test_elementpath_requirement(self):
+        package_dir = pathlib.Path(__file__).parent.parent
+        ep_requirement = None
+        for line in fileinput.input(str(package_dir.joinpath('requirements-dev.txt'))):
+            if 'elementpath' in line:
+                ep_requirement = line.strip()
+
+        self.assertIsNotNone(ep_requirement, msg="Missing elementpath in requirements-dev.txt")
+
+        for line in fileinput.input(str(package_dir.joinpath('setup.py'))):
+            if 'elementpath' in line:
+                self.assertIn(ep_requirement, line, msg="Unmatched requirement in setup.py")
 
     def test_base_schema_files(self):
         et = importlib.import_module('xml.etree.ElementTree')

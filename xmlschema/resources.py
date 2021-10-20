@@ -7,13 +7,15 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
+import copy
 import os.path
 import pathlib
 import platform
 import re
 import string
 from io import StringIO, BytesIO
-from typing import cast, Any, AnyStr, Dict, Optional, IO, Iterator, List, Union, Tuple
+from typing import cast, Any, AnyStr, Dict, Optional, IO, Iterator, List, \
+    MutableMapping, Union, Tuple
 from urllib.request import urlopen
 from urllib.parse import urlsplit, urlunsplit, unquote, quote_from_bytes
 from urllib.error import URLError
@@ -23,21 +25,14 @@ from elementpath.protocols import ElementProtocol
 
 from .exceptions import XMLSchemaTypeError, XMLSchemaValueError, XMLResourceError
 from .names import XML_NAMESPACE
-from .etree import ElementType, ElementTreeType, NamespacesType, XMLSourceType, \
-    ElementTree, PyElementTree, SafeXMLParser, etree_tostring
+from .etree import ElementTree, PyElementTree, SafeXMLParser, etree_tostring
+from .aliases import ElementType, ElementTreeType, NamespacesType, XMLSourceType, \
+    NormalizedLocationsType, LocationsType, NsmapType, ParentMapType
 from .helpers import get_namespace, is_etree_element, is_etree_document, \
     etree_iter_location_hints
 
 DEFUSE_MODES = frozenset(('never', 'remote', 'always'))
 SECURITY_MODES = frozenset(('all', 'remote', 'local', 'sandbox'))
-
-# Type Aliases
-NormalizedLocationsType = List[Tuple[str, str]]
-LocationsType = Union[Tuple[Tuple[str, str], ...], Dict[str, str], NormalizedLocationsType]
-NsmapType = Optional[Union[List[Tuple[str, str]], Dict[str, str]]]
-AncestorsType = Optional[List[ElementType]]
-ParentMapType = Optional[Dict[ElementType, Optional[ElementType]]]
-LazyType = Union[bool, int]
 
 ###
 # Restricted XPath parser for XML resources
@@ -51,7 +46,7 @@ LAZY_XML_XPATH_SYMBOLS = frozenset((
 DRIVE_LETTERS = frozenset(string.ascii_letters)
 
 
-class LazyXPath2Parser(XPath2Parser):
+class LazyXPath2Parser(XPath2Parser):  # type: ignore[misc]
     symbol_table = {
         k: v for k, v in XPath2Parser.symbol_table.items()
         if k in LAZY_XML_XPATH_SYMBOLS
@@ -62,8 +57,8 @@ class LazyXPath2Parser(XPath2Parser):
 class LazySelector:
     """A limited XPath selector class for lazy XML resources."""
 
-    def __init__(self, path: str, namespaces: NamespacesType = None) -> None:
-        self.parser = LazyXPath2Parser(namespaces, strict=False)
+    def __init__(self, path: str, namespaces: Optional[NamespacesType] = None) -> None:
+        self.parser = LazyXPath2Parser(namespaces, strict=False)  # type: ignore[arg-type]
         self.path = path
         self.root_token = self.parser.parse(path)
 
@@ -100,7 +95,7 @@ class _PurePath(pathlib.PurePath):
     def __new__(cls, *args: str) -> '_PurePath':
         if cls is _PurePath:
             cls = _WindowsPurePath if os.name == 'nt' else _PosixPurePath
-        return cls._from_parts(args)
+        return cast('_PurePath', cls._from_parts(args))
 
     @classmethod
     def from_uri(cls, uri: str) -> '_PurePath':
@@ -147,15 +142,15 @@ class _PurePath(pathlib.PurePath):
 
     def as_uri(self) -> str:
         if not self.is_absolute():
-            uri = self._flavour.make_uri(self)
+            uri: str = self._flavour.make_uri(self)
             while uri.startswith('file:/'):
                 uri = uri.replace('file:/', 'file:', 1)
             return uri
-        return self._flavour.make_uri(self)
+        return cast(str, self._flavour.make_uri(self))
 
     def normalize(self) -> '_PurePath':
         normalized_path = self._flavour.pathmod.normpath(str(self))
-        return self._from_parts((normalized_path,))
+        return cast('_PurePath', self._from_parts((normalized_path,)))
 
 
 class _PosixPurePath(_PurePath, pathlib.PurePosixPath):
@@ -216,12 +211,13 @@ def is_url(obj: Any) -> bool:
     """
     Checks if and object can be an URL, restricting to strings that cannot be XML data.
     """
-    if not isinstance(obj, (str, bytes)):
-        return False
-    elif isinstance(obj, str):
+    if isinstance(obj, str):
         if '\n' in obj or obj.lstrip().startswith('<'):
             return False
-    elif b'\n' in obj or obj.lstrip().startswith(b'<'):
+    elif isinstance(obj, bytes):
+        if b'\n' in obj or obj.lstrip().startswith(b'<'):
+            return False
+    else:
         return False
 
     try:
@@ -377,7 +373,7 @@ def fetch_namespaces(source: XMLSourceType,
                      base_url: Optional[str] = None,
                      allow: str = 'all',
                      defuse: str = 'remote',
-                     timeout: int = 30) -> Dict[str, str]:
+                     timeout: int = 30) -> NamespacesType:
     """
     Fetches namespaces information from the XML data source. The argument *source*
     can be a string containing the XML document or file path or an url or a file-like
@@ -417,7 +413,7 @@ class XMLResource:
     _text: Optional[str] = None
     _url: Optional[str] = None
     _nsmap: Optional[Dict[ElementType, List[Tuple[str, str]]]] = None
-    _parent_map: ParentMapType = None
+    _parent_map: Optional[ParentMapType] = None
     _lazy: Union[bool, int] = False
 
     def __init__(self, source: XMLSourceType,
@@ -536,7 +532,7 @@ class XMLResource:
             if not url.startswith(normalize_url(self._base_url)):
                 raise XMLResourceError("block access to out of sandbox file {}".format(url))
 
-    def _update_nsmap(self, nsmap: Dict[str, str], prefix: str, uri: str) -> None:
+    def _update_nsmap(self, nsmap: MutableMapping[str, str], prefix: str, uri: str) -> None:
         if not prefix:
             if not uri:
                 return
@@ -559,10 +555,10 @@ class XMLResource:
                 prefix += '0'
         nsmap[prefix] = uri
 
-    def _lazy_iterparse(self, resource: IO[AnyStr], nsmap: NsmapType = None) \
+    def _lazy_iterparse(self, resource: IO[AnyStr], nsmap: Optional[NsmapType] = None) \
             -> Iterator[Tuple[str, ElementType]]:
         events: Tuple[str, ...]
-        _nsmap: list
+        _nsmap: List[Tuple[str, str]]
 
         if nsmap is None:
             events = 'start', 'end'
@@ -746,9 +742,9 @@ class XMLResource:
             _url, self._url = self._url, url
             try:
                 if not lazy:
-                    self._parse(cast(IO, source))
+                    self._parse(cast(IO[str], source))
                 else:
-                    for _ in self._lazy_iterparse(cast(IO, source)):  # pragma: no cover
+                    for _ in self._lazy_iterparse(cast(IO[str], source)):  # pragma: no cover
                         break
             except Exception:
                 self._url = _url
@@ -888,13 +884,13 @@ class XMLResource:
             raise XMLResourceError("can't open, the resource has no URL associated.")
 
         try:
-            return urlopen(self._url, timeout=self._timeout)
+            return cast(IO[AnyStr], urlopen(self._url, timeout=self._timeout))
         except URLError as err:
             raise XMLResourceError(
                 "cannot access to resource %r: %s" % (self._url, err.reason)
             )
 
-    def seek(self, position) -> Optional[int]:
+    def seek(self, position: int) -> Optional[int]:
         """
         Change stream position if the XML resource was created with a seekable
         file-like object. In the other cases this method has no effect.
@@ -977,7 +973,7 @@ class XMLResource:
         return self._text is not None
 
     def iter(self, tag: Optional[str] = None,
-             nsmap: Optional[Dict[str, str]] = None) -> Iterator[ElementType]:
+             nsmap: Optional[MutableMapping[str, str]] = None) -> Iterator[ElementType]:
         """
         XML resource tree iterator. The iteration of a lazy resource
         is in reverse order (top level element is the last). If tag
@@ -1029,8 +1025,8 @@ class XMLResource:
         for elem in self.iter(tag):
             yield from etree_iter_location_hints(elem)
 
-    def iter_depth(self, mode: int = 1, nsmap: NsmapType = None,
-                   ancestors: AncestorsType = None) -> Iterator[ElementType]:
+    def iter_depth(self, mode: int = 1, nsmap: Optional[NsmapType] = None,
+                   ancestors: Optional[List[ElementType]] = None) -> Iterator[ElementType]:
         """
         Iterates XML subtrees. For fully loaded resources yields the root element.
         On lazy resources the argument *mode* can change the sequence and the
@@ -1096,9 +1092,10 @@ class XMLResource:
             if self._source is not resource:
                 resource.close()
 
-    def iterfind(self, path: str, namespaces: NamespacesType = None,
-                 nsmap: NsmapType = None,
-                 ancestors: AncestorsType = None) -> Iterator[ElementType]:
+    def iterfind(self, path: str,
+                 namespaces: Optional[NamespacesType] = None,
+                 nsmap: Optional[NsmapType] = None,
+                 ancestors: Optional[List[ElementType]] = None) -> Iterator[ElementType]:
         """
         Apply XPath selection to XML resource that yields full subtrees.
 
@@ -1201,15 +1198,18 @@ class XMLResource:
 
                     yield elem
 
-    def find(self, path: str, namespaces: NamespacesType = None, nsmap: NsmapType = None,
-             ancestors: AncestorsType = None) -> Optional[ElementType]:
+    def find(self, path: str,
+             namespaces: Optional[NamespacesType] = None,
+             nsmap: Optional[NsmapType] = None,
+             ancestors: Optional[List[ElementType]] = None) -> Optional[ElementType]:
         return next(self.iterfind(path, namespaces, nsmap, ancestors), None)
 
-    def findall(self, path: str, namespaces: NamespacesType = None) -> List[ElementType]:
+    def findall(self, path: str, namespaces: Optional[NamespacesType] = None) \
+            -> List[ElementType]:
         return list(self.iterfind(path, namespaces))
 
-    def get_namespaces(self, namespaces: NamespacesType = None,
-                       root_only: Optional[bool] = None) -> Dict[str, str]:
+    def get_namespaces(self, namespaces: Optional[NamespacesType] = None,
+                       root_only: Optional[bool] = None) -> NamespacesType:
         """
         Extracts namespaces with related prefixes from the XML resource. If a duplicate
         prefix declaration is encountered and the prefix maps a different namespace,
@@ -1231,7 +1231,7 @@ class XMLResource:
             msg = "reserved prefix (xml) must not be bound to another namespace name"
             raise XMLSchemaValueError(msg)
         else:
-            namespaces = namespaces.copy()
+            namespaces = copy.copy(namespaces)
 
         try:
             for _ in self.iter(nsmap=namespaces):

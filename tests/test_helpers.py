@@ -28,7 +28,7 @@ from xmlschema.validators.helpers import get_xsd_derivation_attribute, \
     base64_binary_validator, hex_binary_validator, \
     int_validator, long_validator, unsigned_byte_validator, \
     unsigned_short_validator, negative_int_validator, error_type_validator
-from xmlschema.validators.models import OccursCounter
+from xmlschema.validators.particles import OccursCalculator
 
 
 class TestHelpers(unittest.TestCase):
@@ -46,13 +46,20 @@ class TestHelpers(unittest.TestCase):
             'a1': 'extension', 'a2': ' restriction', 'a3': '#all', 'a4': 'other',
             'a5': 'restriction extension restriction ', 'a6': 'other restriction'
         })
-        values = ('extension', 'restriction')
+        values = {'extension', 'restriction'}
         self.assertEqual(get_xsd_derivation_attribute(elem, 'a1', values), 'extension')
         self.assertEqual(get_xsd_derivation_attribute(elem, 'a2', values), ' restriction')
-        self.assertEqual(get_xsd_derivation_attribute(elem, 'a3', values), 'extension restriction')
+
+        result = get_xsd_derivation_attribute(elem, 'a3', values)
+        self.assertSetEqual(set(result.strip().split()),
+                            set('extension restriction'.split()))
+
         self.assertRaises(ValueError, get_xsd_derivation_attribute, elem, 'a4', values)
-        self.assertEqual(get_xsd_derivation_attribute(elem, 'a5', values),
-                         'restriction extension restriction ')
+
+        result = get_xsd_derivation_attribute(elem, 'a5', values)
+        self.assertEqual(set(result.strip().split()),
+                         set('restriction extension restriction'.split()))
+
         self.assertRaises(ValueError, get_xsd_derivation_attribute, elem, 'a6', values)
         self.assertEqual(get_xsd_derivation_attribute(elem, 'a7', values), '')
 
@@ -139,42 +146,42 @@ class TestHelpers(unittest.TestCase):
         with self.assertRaises(TypeError):
             list(iter_nested_items([10, 20], list_class=tuple))
 
-    def test_occurs_counter_class(self):
-        counter = OccursCounter()
-        self.assertEqual(repr(counter), 'OccursCounter(0, 0)')
+    def test_occurs_calculator_class(self):
+        counter = OccursCalculator()
+        self.assertEqual(repr(counter), 'OccursCalculator(0, 0)')
 
-        other = OccursCounter()  # Only for test isolation, usually it's a particle.
+        other = OccursCalculator()  # Only for test isolation, usually it's a particle.
         other.min_occurs = 5
         other.max_occurs = 10
 
         counter += other
-        self.assertEqual(repr(counter), 'OccursCounter(5, 10)')
+        self.assertEqual(repr(counter), 'OccursCalculator(5, 10)')
         counter *= other
-        self.assertEqual(repr(counter), 'OccursCounter(25, 100)')
+        self.assertEqual(repr(counter), 'OccursCalculator(25, 100)')
 
-        counter = OccursCounter()
+        counter = OccursCalculator()
         counter.max_occurs = None
-        self.assertEqual(repr(counter), 'OccursCounter(0, None)')
-        self.assertEqual(repr(counter * other), 'OccursCounter(0, None)')
-        self.assertEqual(repr(counter + other), 'OccursCounter(5, None)')
-        self.assertEqual(repr(counter * other), 'OccursCounter(25, None)')
+        self.assertEqual(repr(counter), 'OccursCalculator(0, None)')
+        self.assertEqual(repr(counter * other), 'OccursCalculator(0, None)')
+        self.assertEqual(repr(counter + other), 'OccursCalculator(5, None)')
+        self.assertEqual(repr(counter * other), 'OccursCalculator(25, None)')
 
         counter.reset()
-        self.assertEqual(repr(counter), 'OccursCounter(0, 0)')
+        self.assertEqual(repr(counter), 'OccursCalculator(0, 0)')
 
         counter.max_occurs = None
         other.min_occurs = other.max_occurs = 0
-        self.assertEqual(repr(counter * other), 'OccursCounter(0, 0)')
+        self.assertEqual(repr(counter * other), 'OccursCalculator(0, 0)')
 
         counter.reset()
         other.min_occurs = 0
         other.max_occurs = None
-        self.assertEqual(repr(counter * other), 'OccursCounter(0, 0)')
-        self.assertEqual(repr(counter + other), 'OccursCounter(0, None)')
-        self.assertEqual(repr(counter + other), 'OccursCounter(0, None)')
+        self.assertEqual(repr(counter * other), 'OccursCalculator(0, 0)')
+        self.assertEqual(repr(counter + other), 'OccursCalculator(0, None)')
+        self.assertEqual(repr(counter + other), 'OccursCalculator(0, None)')
 
         counter.max_occurs = 1
-        self.assertEqual(repr(counter * other), 'OccursCounter(0, None)')
+        self.assertEqual(repr(counter * other), 'OccursCalculator(0, None)')
 
     def test_get_namespace(self):
         self.assertEqual(get_namespace(''), '')

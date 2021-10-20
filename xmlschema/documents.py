@@ -8,25 +8,22 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 import json
-from typing import Any, Dict, List, Optional, Type, Union, Tuple, IO, Iterator
+from io import IOBase, TextIOBase
+from typing import Any, Dict, List, Optional, Type, Union, Tuple, \
+    IO, BinaryIO, TextIO, Iterator
 
 from .exceptions import XMLSchemaTypeError, XMLSchemaValueError, XMLResourceError
 from .names import XSD_NAMESPACE, XSI_TYPE
-from .etree import ElementType, XMLSourceType, NamespacesType, \
-    ElementTree, etree_tostring
+from .etree import ElementTree, etree_tostring
+from .aliases import ElementType, XMLSourceType, NamespacesType, LocationsType, \
+    LazyType, SchemaSourceType, ConverterType, DecodeType, EncodeType, \
+    JsonDecodeType
 from .helpers import is_etree_document
-from .resources import LocationsType, LazyType, fetch_schema_locations, XMLResource
+from .resources import fetch_schema_locations, XMLResource
 from .validators import XMLSchema10, XMLSchemaBase, XMLSchemaValidationError
-from .validators.schema import SchemaSourceType, ConverterType, \
-    DecodeReturnType, EncodeReturnType
 
 
-XMLDocumentType = Union[XMLSourceType, XMLResource]
-JsonDecodeReturnType = Union[str, None, Tuple[XMLSchemaValidationError, ...],
-                             Tuple[Union[str, None], Tuple[XMLSchemaValidationError, ...]]]
-
-
-def get_context(xml_document: XMLDocumentType,
+def get_context(xml_document: Union[XMLSourceType, XMLResource],
                 schema: Optional[Union[XMLSchemaBase, SchemaSourceType]] = None,
                 cls: Optional[Type[XMLSchemaBase]] = None,
                 locations: Optional[LocationsType] = None,
@@ -45,6 +42,9 @@ def get_context(xml_document: XMLDocumentType,
 
     if cls is None:
         cls = XMLSchema10
+    elif not issubclass(cls, XMLSchemaBase):
+        raise XMLSchemaTypeError(f"invalid schema class {cls}")
+
     if isinstance(xml_document, XMLResource):
         resource = xml_document
     else:
@@ -60,7 +60,7 @@ def get_context(xml_document: XMLDocumentType,
         schema_location, locations = fetch_schema_locations(resource, locations, base_url=base_url)
     except ValueError:
         if schema is None:
-            if XSI_TYPE in resource.root.attrib:
+            if XSI_TYPE in resource.root.attrib and cls.meta_schema is not None:
                 return resource, cls.meta_schema
             elif dummy_schema:
                 return resource, get_dummy_schema(resource, cls)
@@ -118,13 +118,13 @@ def get_lazy_json_encoder(errors: List[XMLSchemaValidationError]) -> Type[json.J
     return JSONLazyEncoder
 
 
-def validate(xml_document: XMLDocumentType,
+def validate(xml_document: Union[XMLSourceType, XMLResource],
              schema: Optional[XMLSchemaBase] = None,
              cls: Optional[Type[XMLSchemaBase]] = None,
              path: Optional[str] = None,
              schema_path: Optional[str] = None,
              use_defaults: bool = True,
-             namespaces: NamespacesType = None,
+             namespaces: Optional[NamespacesType] = None,
              locations: Optional[LocationsType] = None,
              base_url: Optional[str] = None,
              defuse: str = 'remote',
@@ -167,13 +167,13 @@ def validate(xml_document: XMLDocumentType,
     _schema.validate(source, path, schema_path, use_defaults, namespaces)
 
 
-def is_valid(xml_document: XMLDocumentType,
+def is_valid(xml_document: Union[XMLSourceType, XMLResource],
              schema: Optional[XMLSchemaBase] = None,
              cls: Optional[Type[XMLSchemaBase]] = None,
              path: Optional[str] = None,
              schema_path: Optional[str] = None,
              use_defaults: bool = True,
-             namespaces: NamespacesType = None,
+             namespaces: Optional[NamespacesType] = None,
              locations: Optional[LocationsType] = None,
              base_url: Optional[str] = None,
              defuse: str = 'remote',
@@ -189,13 +189,13 @@ def is_valid(xml_document: XMLDocumentType,
     return schema.is_valid(source, path, schema_path, use_defaults, namespaces)
 
 
-def iter_errors(xml_document: XMLDocumentType,
+def iter_errors(xml_document: Union[XMLSourceType, XMLResource],
                 schema: Optional[XMLSchemaBase] = None,
                 cls: Optional[Type[XMLSchemaBase]] = None,
                 path: Optional[str] = None,
                 schema_path: Optional[str] = None,
                 use_defaults: bool = True,
-                namespaces: NamespacesType = None,
+                namespaces: Optional[NamespacesType] = None,
                 locations: Optional[LocationsType] = None,
                 base_url: Optional[str] = None,
                 defuse: str = 'remote',
@@ -211,7 +211,7 @@ def iter_errors(xml_document: XMLDocumentType,
     return schema.iter_errors(source, path, schema_path, use_defaults, namespaces)
 
 
-def to_dict(xml_document: XMLDocumentType,
+def to_dict(xml_document: Union[XMLSourceType, XMLResource],
             schema: Optional[XMLSchemaBase] = None,
             cls: Optional[Type[XMLSchemaBase]] = None,
             path: Optional[str] = None,
@@ -220,7 +220,7 @@ def to_dict(xml_document: XMLDocumentType,
             base_url: Optional[str] = None,
             defuse: str = 'remote',
             timeout: int = 300,
-            lazy: LazyType = False, **kwargs: Any) -> DecodeReturnType:
+            lazy: LazyType = False, **kwargs: Any) -> DecodeType[Any]:
     """
     Decodes an XML document to a Python's nested dictionary. The decoding is based
     on an XML Schema class instance. For default the document is validated during
@@ -262,7 +262,7 @@ def to_dict(xml_document: XMLDocumentType,
     return _schema.decode(source, path=path, process_namespaces=process_namespaces, **kwargs)
 
 
-def to_json(xml_document: XMLDocumentType,
+def to_json(xml_document: Union[XMLSourceType, XMLResource],
             fp: Optional[IO[str]] = None,
             schema: Optional[XMLSchemaBase] = None,
             cls: Optional[Type[XMLSchemaBase]] = None,
@@ -274,8 +274,8 @@ def to_json(xml_document: XMLDocumentType,
             defuse: str = 'remote',
             timeout: int = 300,
             lazy: LazyType = False,
-            json_options: Optional[dict] = None,
-            **kwargs: Any) -> JsonDecodeReturnType:
+            json_options: Optional[Dict[str, Any]] = None,
+            **kwargs: Any) -> JsonDecodeType:
     """
     Serialize an XML document to JSON. For default the XML data is validated during
     the decoding phase. Raises an :exc:`XMLSchemaValidationError` if the XML document
@@ -350,7 +350,8 @@ def from_json(source: Union[str, bytes, IO[str]],
               schema: XMLSchemaBase,
               path: Optional[str] = None,
               converter: Optional[ConverterType] = None,
-              json_options: Optional[dict] = None, **kwargs: Any) -> EncodeReturnType:
+              json_options: Optional[Dict[str, Any]] = None,
+              **kwargs: Any) -> EncodeType[ElementType]:
     """
     Deserialize JSON data to an XML Element.
 
@@ -410,14 +411,14 @@ class XmlDocument(XMLResource):
     schema: Optional[XMLSchemaBase] = None
     _fallback_schema: Optional[XMLSchemaBase] = None
     validation: str = 'skip'
-    namespaces: NamespacesType = None
-    errors: Union[tuple, List[XMLSchemaValidationError]] = ()
+    namespaces: Optional[NamespacesType] = None
+    errors: Union[Tuple[()], List[XMLSchemaValidationError]] = ()
 
     def __init__(self, source: XMLSourceType,
                  schema: Optional[Union[XMLSchemaBase, SchemaSourceType]] = None,
                  cls: Optional[Type[XMLSchemaBase]] = None,
                  validation: str = 'strict',
-                 namespaces: NamespacesType = None,
+                 namespaces: Optional[NamespacesType] = None,
                  locations: Optional[LocationsType] = None,
                  base_url: Optional[str] = None,
                  allow: str = 'all',
@@ -500,20 +501,24 @@ class XmlDocument(XMLResource):
         else:
             return ElementTree.ElementTree(self._root)
 
-    def tostring(self, indent: str = '', max_lines=None, spaces_for_tab=4,
-                 xml_declaration=False, encoding='unicode', method='xml'):
+    def tostring(self, indent: str = '', max_lines: Optional[int] = None,
+                 spaces_for_tab: int = 4, xml_declaration: bool = False,
+                 encoding: str = 'unicode', method: str = 'xml') -> str:
         if self._lazy:
             raise XMLResourceError("cannot serialize a lazy XML document")
 
-        return etree_tostring(
+        _string = etree_tostring(
             elem=self._root,
             namespaces=self.namespaces,
             xml_declaration=xml_declaration,
             encoding=encoding,
             method=method
         )
+        if isinstance(_string, bytes):
+            return _string.decode('utf-8')
+        return _string
 
-    def decode(self, **kwargs: Any) -> DecodeReturnType:
+    def decode(self, **kwargs: Any) -> DecodeType[Any]:
         """
         Decode the XML document to a nested Python dictionary.
 
@@ -531,8 +536,9 @@ class XmlDocument(XMLResource):
         obj = schema.to_dict(self, **kwargs)
         return obj[0] if isinstance(obj, tuple) else obj
 
-    def to_json(self, fp: Optional[IO[str]] = None, json_options: Optional[dict] = None,
-                **kwargs: Any) -> JsonDecodeReturnType:
+    def to_json(self, fp: Optional[IO[str]] = None,
+                json_options: Optional[Dict[str, Any]] = None,
+                **kwargs: Any) -> JsonDecodeType:
         """
         Converts loaded XML data to a JSON string or file.
 
@@ -579,13 +585,14 @@ class XmlDocument(XMLResource):
             result = json.dumps(obj, **json_options)
             return result if not errors else (result, tuple(errors))
 
-    def write(self, file, encoding='us-ascii', xml_declaration=None,
-              default_namespace=None, method="xml"):
+    def write(self, file: Union[str, TextIO, BinaryIO],
+              encoding: str = 'us-ascii', xml_declaration: bool = False,
+              default_namespace: Optional[str] = None, method: str = "xml") -> None:
         """Serialize an XML resource to a file. Cannot be used with lazy resources."""
         if self._lazy:
             raise XMLResourceError("cannot serialize a lazy XML document")
 
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             'xml_declaration': xml_declaration,
             'encoding': encoding,
             'method': method,
@@ -593,7 +600,12 @@ class XmlDocument(XMLResource):
         if not default_namespace:
             kwargs['namespaces'] = self.namespaces
         else:
-            namespaces = self.namespaces.copy()
+            namespaces: Optional[Dict[Optional[str], str]]
+            if self.namespaces is None:
+                namespaces = {}
+            else:
+                namespaces = {k: v for k, v in self.namespaces.items()}
+
             if hasattr(self._root, 'nsmap'):
                 # noinspection PyTypeChecker
                 namespaces[None] = default_namespace
@@ -601,12 +613,27 @@ class XmlDocument(XMLResource):
                 namespaces[''] = default_namespace
             kwargs['namespaces'] = namespaces
 
-        if hasattr(file, 'write'):
-            file.write(etree_tostring(self._root, **kwargs))
-            file.close()
-        elif encoding == 'unicode':
-            with open(file, 'w', encoding='utf-8') as fp:
-                fp.write(etree_tostring(self._root, **kwargs))
+        fp: Union[TextIO, BinaryIO]
+        _string = etree_tostring(self._root, **kwargs)
+
+        if isinstance(file, str):
+            if isinstance(_string, str):
+                with open(file, 'w', encoding='utf-8') as fp:
+                    fp.write(_string)
+            else:
+                with open(file, 'wb') as fp:
+                    fp.write(_string)  # type: ignore[argument]
+
+        elif isinstance(file, TextIOBase):
+            if isinstance(_string, bytes):
+                file.write(_string.decode('utf-8'))
+            else:
+                file.write(_string)
+
+        elif isinstance(file, IOBase):
+            if isinstance(_string, str):
+                file.write(_string.encode('utf-8'))
+            else:
+                file.write(_string)
         else:
-            with open(file, 'wb') as fp:
-                fp.write(etree_tostring(self._root, **kwargs))
+            raise XMLSchemaTypeError(f"unexpected type {type(file)} for 'file' argument")

@@ -12,7 +12,8 @@ A unified setup module for ElementTree with a safe parser and helper functions.
 """
 import sys
 import re
-from typing import Any, AnyStr, Dict, Optional, Union, IO
+from collections import namedtuple
+from typing import Any, MutableMapping, Optional, Union
 
 from .exceptions import XMLSchemaTypeError
 
@@ -60,13 +61,6 @@ else:
     import xml.etree.ElementTree as ElementTree
 
 
-# Aliases for static type checking
-ElementType = ElementTree.Element
-ElementTreeType = ElementTree.ElementTree
-XMLSourceType = Union[str, bytes, IO[AnyStr], ElementType, ElementTreeType]
-NamespacesType = Optional[Dict[str, str]]
-
-
 etree_element = ElementTree.Element
 ParseError = ElementTree.ParseError
 py_etree_element = PyElementTree.Element
@@ -82,29 +76,41 @@ class SafeXMLParser(PyElementTree.XMLParser):
     :param encoding: if provided, its value overrides the encoding specified \
     in the XML file.
     """
-    def __init__(self, target=None, encoding=None):
+    def __init__(self, target: Optional[Any] = None, encoding: Optional[str] = None) -> None:
         super(SafeXMLParser, self).__init__(target=target, encoding=encoding)
         self.parser.EntityDeclHandler = self.entity_declaration
         self.parser.UnparsedEntityDeclHandler = self.unparsed_entity_declaration
         self.parser.ExternalEntityRefHandler = self.external_entity_reference
 
-    def entity_declaration(self, entity_name, is_parameter_entity, value, base,
+    def entity_declaration(self, entity_name, is_parameter_entity, value, base,  # type: ignore
                            system_id, public_id, notation_name):
         raise PyElementTree.ParseError(
             "Entities are forbidden (entity_name={!r})".format(entity_name)
         )
 
-    def unparsed_entity_declaration(self, entity_name, base, system_id,
+    def unparsed_entity_declaration(self, entity_name, base, system_id,  # type: ignore
                                     public_id, notation_name):
         raise PyElementTree.ParseError(
             "Unparsed entities are forbidden (entity_name={!r})".format(entity_name)
         )
 
-    def external_entity_reference(self, context, base, system_id, public_id):
+    def external_entity_reference(self, context, base, system_id, public_id):  # type: ignore
         raise PyElementTree.ParseError(
             "External references are forbidden (system_id={!r}, "
             "public_id={!r})".format(system_id, public_id)
         )  # pragma: no cover (EntityDeclHandler is called before)
+
+
+ElementData = namedtuple('ElementData', ['tag', 'text', 'content', 'attributes'])
+"""
+Namedtuple for Element data interchange between decoders and converters.
+The field *tag* is a string containing the Element's tag, *text* can be `None`
+or a string representing the Element's text, *content* can be `None`, a list
+containing the Element's children or a dictionary containing element name to
+list of element contents for the Element's children (used for unordered input
+data), *attributes* can be `None` or a dictionary containing the Element's
+attributes.
+"""
 
 
 def is_etree_element(obj: Any) -> bool:
@@ -112,8 +118,8 @@ def is_etree_element(obj: Any) -> bool:
     return hasattr(obj, 'append') and hasattr(obj, 'tag') and hasattr(obj, 'attrib')
 
 
-def etree_tostring(elem: ElementType,
-                   namespaces: Optional[Dict[str, str]] = None,
+def etree_tostring(elem: etree_element,
+                   namespaces: Optional[MutableMapping[str, str]] = None,
                    indent: str = '',
                    max_lines: Optional[int] = None,
                    spaces_for_tab: Optional[int] = None,
@@ -215,6 +221,5 @@ def etree_tostring(elem: ElementType,
     return '\n'.join(reindent(line) for line in lines).encode(encoding)
 
 
-__all__ = ['ElementType', 'ElementTreeType', 'XMLSourceType', 'NamespacesType',
-           'ElementTree', 'PyElementTree', 'ParseError', 'SafeXMLParser',
-           'etree_element', 'py_etree_element', 'is_etree_element', 'etree_tostring']
+__all__ = ['ElementTree', 'PyElementTree', 'ParseError', 'SafeXMLParser', 'etree_element',
+           'py_etree_element', 'ElementData', 'is_etree_element', 'etree_tostring']

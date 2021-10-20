@@ -10,10 +10,11 @@
 import re
 from collections import Counter
 from decimal import Decimal
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Iterator, List, MutableMapping, \
+    Optional, Tuple, Union
 from .exceptions import XMLSchemaValueError, XMLSchemaTypeError
 from .names import XSI_SCHEMA_LOCATION, XSI_NONS_SCHEMA_LOCATION
-from .etree import ElementType, etree_element
+from .aliases import ElementType, NamespacesType, AtomicValueType, NumericValueType
 
 ###
 # Helper functions for QNames
@@ -21,18 +22,18 @@ from .etree import ElementType, etree_element
 NAMESPACE_PATTERN = re.compile(r'{([^}]*)}')
 
 
-def get_namespace(qname: str, namespaces: Optional[Dict[str, str]] = None) -> str:
+def get_namespace(qname: str, namespaces: Optional[NamespacesType] = None) -> str:
     """
     Returns the namespace URI associated with a QName. If a namespace map is
     provided tries to resolve a prefixed QName and then to extract the namespace.
 
     :param qname: an extended QName or a local name or a prefixed QName.
-    :param namespaces: optional dictionary with a map from prefixes to namespace URIs.
+    :param namespaces: optional mapping from prefixes to namespace URIs.
     """
     if not qname:
         return ''
     elif qname[0] != '{':
-        if not namespaces:
+        if namespaces is None:
             return ''
         qname = get_extended_qname(qname, namespaces)
 
@@ -79,15 +80,17 @@ def local_name(qname: str) -> str:
         return qname
 
 
-def get_prefixed_qname(qname: str, namespaces: Dict[str, str], use_empty: bool = True) -> str:
+def get_prefixed_qname(qname: str,
+                       namespaces: Optional[MutableMapping[str, str]],
+                       use_empty: bool = True) -> str:
     """
     Get the prefixed form of a QName, using a namespace map.
 
     :param qname: an extended QName or a local name or a prefixed QName.
-    :param namespaces: a dictionary with a map from prefixes to namespace URIs.
+    :param namespaces: an optional mapping from prefixes to namespace URIs.
     :param use_empty: if `True` use the empty prefix for mapping.
     """
-    if not qname or qname[0] != '{':
+    if not namespaces or not qname or qname[0] != '{':
         return qname
 
     namespace = get_namespace(qname)
@@ -105,14 +108,17 @@ def get_prefixed_qname(qname: str, namespaces: Dict[str, str], use_empty: bool =
         return qname
 
 
-def get_extended_qname(qname: str, namespaces: Dict[str, str]) -> str:
+def get_extended_qname(qname: str, namespaces: Optional[MutableMapping[str, str]]) -> str:
     """
     Get the extended form of a QName, using a namespace map.
     Local names are mapped to the default namespace.
 
     :param qname: a prefixed QName or a local name or an extended QName.
-    :param namespaces: a dictionary with a map from prefixes to namespace URIs.
+    :param namespaces: an optional mapping from prefixes to namespace URIs.
     """
+    if not namespaces:
+        return qname
+
     try:
         if qname[0] == '{':
             return qname
@@ -148,8 +154,10 @@ def is_etree_document(obj: object) -> bool:
     return hasattr(obj, 'getroot') and hasattr(obj, 'parse') and hasattr(obj, 'iter')
 
 
-def etree_iterpath(elem: ElementType, tag: Optional[str] = None,
-                   path: str = '.', namespaces: Optional[Dict[str, str]] = None,
+def etree_iterpath(elem: ElementType,
+                   tag: Optional[str] = None,
+                   path: str = '.',
+                   namespaces: Optional[NamespacesType] = None,
                    add_position: bool = False) -> Iterator[Tuple[ElementType, str]]:
     """
     Creates an iterator for the element and its subelements that yield elements and paths.
@@ -193,7 +201,7 @@ def etree_iterpath(elem: ElementType, tag: Optional[str] = None,
 
 def etree_getpath(elem: ElementType,
                   root: ElementType,
-                  namespaces: Optional[Dict[str, str]] = None,
+                  namespaces: Optional[NamespacesType] = None,
                   relative: bool = True,
                   add_position: bool = False,
                   parent_path: bool = False) -> Optional[str]:
@@ -202,7 +210,7 @@ def etree_getpath(elem: ElementType,
 
     :param elem: the descendant element.
     :param root: the root element.
-    :param namespaces: is an optional mapping from namespace prefix to URI.
+    :param namespaces: an optional mapping from namespace prefix to URI.
     :param relative: returns a relative path.
     :param add_position: add context position to child elements that appear multiple times.
     :param parent_path: if set to `True` returns the parent path. Default is `False`.
@@ -238,7 +246,7 @@ def etree_iter_location_hints(elem: ElementType) -> Iterator[Tuple[Any, Any]]:
             yield '', url
 
 
-def prune_etree(root: etree_element, selector: Callable[[etree_element], bool]) \
+def prune_etree(root: ElementType, selector: Callable[[ElementType], bool]) \
         -> Optional[bool]:
     """
     Removes from an tree structure the elements that verify the selector
@@ -249,7 +257,7 @@ def prune_etree(root: etree_element, selector: Callable[[etree_element], bool]) 
     :param selector: the single argument function to apply on each visited node.
     :return: `True` if the root node verify the selector function, `None` otherwise.
     """
-    def _prune_subtree(elem: etree_element) -> None:
+    def _prune_subtree(elem: ElementType) -> None:
         for child in elem[:]:
             if selector(child):
                 elem.remove(child)
@@ -264,7 +272,7 @@ def prune_etree(root: etree_element, selector: Callable[[etree_element], bool]) 
     return None
 
 
-def count_digits(number: Union[str, bytes, int, float, Decimal]) -> Tuple[int, int]:
+def count_digits(number: NumericValueType) -> Tuple[int, int]:
     """
     Counts the digits of a number.
 
@@ -304,9 +312,8 @@ def strictly_equal(obj1: object, obj2: object) -> bool:
     return obj1 == obj2 and type(obj1) is type(obj2)
 
 
-def raw_xml_encode(
-    value: Optional[Union[str, bytes, bool, int, float, Decimal, List[str], Tuple[str]]]
-) -> Optional[str]:
+def raw_xml_encode(value: Union[None, AtomicValueType, List[AtomicValueType],
+                                Tuple[AtomicValueType, ...]]) -> Optional[str]:
     """Encodes a simple value to XML."""
     if isinstance(value, bool):
         return 'true' if value else 'false'

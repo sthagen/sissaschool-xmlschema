@@ -7,17 +7,18 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast, Iterable, Union, Callable
+from typing import TYPE_CHECKING, Any, Optional, cast, Iterable, Union, Callable
 from ..exceptions import XMLSchemaException, XMLSchemaWarning, XMLSchemaValueError
-from ..etree import ElementType, NamespacesType, etree_tostring
+from ..etree import etree_tostring
+from ..aliases import ElementType, NamespacesType, BaseElementType, ModelParticleType
 from ..helpers import get_prefixed_qname, etree_getpath, is_etree_element
 
 if TYPE_CHECKING:
     from ..resources import XMLResource
-    from .xsdbase import XsdValidator, ValidationMixin
-    from .particles import ParticleMixin, ModelGroup
-    from .elements import XsdElement
-    from .wildcards import XsdAnyElement
+    from .xsdbase import XsdValidator
+    from .groups import XsdGroup
+
+ValidatorType = Union['XsdValidator', Callable[[Any], None]]
 
 
 class XMLSchemaValidatorError(XMLSchemaException):
@@ -25,26 +26,20 @@ class XMLSchemaValidatorError(XMLSchemaException):
     Base class for XSD validator errors.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or ModelGroup or a callable
     :param message: the error message.
-    :type message: str or unicode
     :param elem: the element that contains the error.
-    :type elem: Element
     :param source: the XML resource that contains the error.
-    :type source: XMLResource
     :param namespaces: is an optional mapping from namespace prefix to URI.
-    :type namespaces: dict
     :ivar path: the XPath of the element, calculated when the element is set \
     or the XML resource is set.
     """
     path: Optional[str]
 
-    def __init__(self, validator: Union['XsdValidator', 'ValidationMixin',
-                                        'ModelGroup', Callable[[Any], None]],
+    def __init__(self, validator: ValidatorType,
                  message: str,
                  elem: Optional[ElementType] = None,
                  source: Optional['XMLResource'] = None,
-                 namespaces: Optional[Dict[str, str]] = None) -> None:
+                 namespaces: Optional[NamespacesType] = None) -> None:
         self.path = None
         self.validator = validator
         self.message = message[:-1] if message[-1] in ('.', ':') else message
@@ -122,9 +117,7 @@ class XMLSchemaNotBuiltError(XMLSchemaValidatorError, RuntimeError):
     Raised when there is an improper usage attempt of a not built XSD validator.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator
     :param message: the error message.
-    :type message: str or unicode
     """
     def __init__(self, validator: 'XsdValidator', message: str) -> None:
         super(XMLSchemaNotBuiltError, self).__init__(
@@ -141,11 +134,8 @@ class XMLSchemaParseError(XMLSchemaValidatorError, SyntaxError):  # type: ignore
     Raised when an error is found during the building of an XSD validator.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or function
     :param message: the error message.
-    :type message: str or unicode
     :param elem: the element that contains the error.
-    :type elem: Element
     """
     def __init__(self, validator: 'XsdValidator', message: str,
                  elem: Optional[ElementType] = None) -> None:
@@ -163,11 +153,9 @@ class XMLSchemaModelError(XMLSchemaValidatorError, ValueError):
     Raised when a model error is found during the checking of a model group.
 
     :param group: the XSD model group.
-    :type group: ModelGroup
     :param message: the error message.
-    :type message: str or unicode
     """
-    def __init__(self, group: 'ModelGroup', message: str) -> None:
+    def __init__(self, group: 'XsdGroup', message: str) -> None:
         super(XMLSchemaModelError, self).__init__(
             validator=group,
             message=message,
@@ -179,7 +167,7 @@ class XMLSchemaModelError(XMLSchemaValidatorError, ValueError):
 
 class XMLSchemaModelDepthError(XMLSchemaModelError):
     """Raised when recursion depth is exceeded while iterating a model group."""
-    def __init__(self, group: 'ModelGroup') -> None:
+    def __init__(self, group: 'XsdGroup') -> None:
         msg = "maximum model recursion depth exceeded while iterating {!r}".format(group)
         super(XMLSchemaModelDepthError, self).__init__(group, message=msg)
 
@@ -192,22 +180,17 @@ class XMLSchemaValidationError(XMLSchemaValidatorError, ValueError):
     containing object representation and a reason.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or function
     :param obj: the not validated XML data.
-    :type obj: Element or tuple or str or list or int or float or bool
     :param reason: the detailed reason of failed validation.
-    :type reason: str or unicode
     :param source: the XML resource that contains the error.
-    :type source: XMLResource
     :param namespaces: is an optional mapping from namespace prefix to URI.
-    :type namespaces: dict
     """
     def __init__(self,
-                 validator: Union['XsdValidator', 'ValidationMixin', Callable[[Any], None]],
+                 validator: ValidatorType,
                  obj: Any,
                  reason: Optional[str] = None,
                  source: Optional['XMLResource'] = None,
-                 namespaces: NamespacesType = None) -> None:
+                 namespaces: Optional[NamespacesType] = None) -> None:
         if not isinstance(obj, str):
             _obj = obj
         else:
@@ -262,17 +245,11 @@ class XMLSchemaDecodeError(XMLSchemaValidationError):
     Raised when an XML data string is not decodable to a Python object.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or function
     :param obj: the not validated XML data.
-    :type obj: Element or tuple or str or list or int or float or bool
     :param decoder: the XML data decoder.
-    :type decoder: type or function or list
     :param reason: the detailed reason of failed validation.
-    :type reason: str or unicode
     :param source: the XML resource that contains the error.
-    :type source: XMLResource
     :param namespaces: is an optional mapping from namespace prefix to URI.
-    :type namespaces: dict
     """
     message = "failed decoding {!r} with {!r}.\n"
 
@@ -281,7 +258,7 @@ class XMLSchemaDecodeError(XMLSchemaValidationError):
                  decoder: Any,
                  reason: Optional[str] = None,
                  source: Optional['XMLResource'] = None,
-                 namespaces: NamespacesType = None) -> None:
+                 namespaces: Optional[NamespacesType] = None) -> None:
         super(XMLSchemaDecodeError, self).__init__(validator, obj, reason, source, namespaces)
         self.decoder = decoder
 
@@ -291,17 +268,11 @@ class XMLSchemaEncodeError(XMLSchemaValidationError):
     Raised when an object is not encodable to an XML data string.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or function
     :param obj: the not validated XML data.
-    :type obj: Element or tuple or str or list or int or float or bool
     :param encoder: the XML encoder.
-    :type encoder: type or function or list
     :param reason: the detailed reason of failed validation.
-    :type reason: str or unicode
     :param source: the XML resource that contains the error.
-    :type source: XMLResource
     :param namespaces: is an optional mapping from namespace prefix to URI.
-    :type namespaces: dict
     """
     message = "failed encoding {!r} with {!r}.\n"
 
@@ -310,7 +281,7 @@ class XMLSchemaEncodeError(XMLSchemaValidationError):
                  encoder: Any,
                  reason: Optional[str] = None,
                  source: Optional['XMLResource'] = None,
-                 namespaces: NamespacesType = None) -> None:
+                 namespaces: Optional[NamespacesType] = None) -> None:
         super(XMLSchemaEncodeError, self).__init__(validator, obj, reason, source, namespaces)
         self.encoder = encoder
 
@@ -320,30 +291,22 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
     Raised when a child element is not validated.
 
     :param validator: the XSD validator.
-    :type validator: XsdValidator or function
     :param elem: the not validated XML element.
-    :type elem: Element
     :param index: the child index.
-    :type index: int
-    :param particle: the validator particle that generated the error. Maybe the validator itself.
-    :type particle: ParticleMixin
+    :param particle: the model particle that generated the error. Maybe the validator itself.
     :param occurs: the particle occurrences.
-    :type occurs: int
     :param expected: the expected element tags/object names.
-    :type expected: list or tuple or None
     :param source: the XML resource that contains the error.
-    :type source: XMLResource
     :param namespaces: is an optional mapping from namespace prefix to URI.
-    :type namespaces: dict
     """
     def __init__(self, validator: 'XsdValidator',
                  elem: ElementType,
                  index: int,
-                 particle: 'ParticleMixin',
+                 particle: ModelParticleType,
                  occurs: int = 0,
-                 expected: Optional[Iterable[Union['XsdElement', 'XsdAnyElement']]] = None,
+                 expected: Optional[Iterable[BaseElementType]] = None,
                  source: Optional['XMLResource'] = None,
-                 namespaces: NamespacesType = None) -> None:
+                 namespaces: Optional[NamespacesType] = None) -> None:
 
         self.index = index
         self.particle = particle
@@ -371,10 +334,13 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
         else:
             expected_tags = []
             for xsd_element in expected:
-                if xsd_element.name is not None:
-                    expected_tags.append(xsd_element.prefixed_name)
-                elif xsd_element.process_contents == 'strict':
-                    expected_tags.append('from %r namespace/s' % xsd_element.namespace)
+                name = xsd_element.prefixed_name
+                if name is not None:
+                    expected_tags.append(name)
+                elif getattr(xsd_element, 'process_contents', '') == 'strict':
+                    expected_tags.append(
+                        'from %r namespace/s' % xsd_element.namespace  # type: ignore[union-attr]
+                    )
 
             if not expected_tags:
                 pass
