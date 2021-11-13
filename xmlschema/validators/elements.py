@@ -22,7 +22,7 @@ from ..names import XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE, XSD_ALTERNATIVE, \
     XSD_ELEMENT, XSD_ANY_TYPE, XSD_UNIQUE, XSD_KEY, XSD_KEYREF, XSI_NIL, \
     XSI_TYPE, XSD_ERROR, XSD_NOTATION_TYPE
 from ..etree import ElementData, etree_element
-from ..aliases import ElementType, SchemaType, BaseXsdType, BaseElementType, \
+from ..aliases import ElementType, SchemaType, BaseXsdType, SchemaElementType, \
     ModelParticleType, ComponentClassType, AtomicValueType, DecodeType, \
     IterDecodeType, IterEncodeType
 from ..helpers import get_qname, get_namespace, etree_iter_location_hints, \
@@ -51,7 +51,7 @@ DataBindingType = Type['dataobjects.DataElement']
 
 
 class XsdElement(XsdComponent, ParticleMixin,
-                 ElementPathMixin[BaseElementType],
+                 ElementPathMixin[SchemaElementType],
                  ValidationMixin[ElementType, Any]):
     """
     Class for XSD 1.0 *element* declarations.
@@ -133,7 +133,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 self.attributes = value.attributes
         super(XsdElement, self).__setattr__(name, value)
 
-    def __iter__(self) -> Iterator[BaseElementType]:
+    def __iter__(self) -> Iterator[SchemaElementType]:
         if self.type.has_complex_content():
             yield from self.type.content.iter_elements()  # type: ignore[union-attr]
 
@@ -650,7 +650,10 @@ class XsdElement(XsdComponent, ParticleMixin,
                             self.schema, item=xpath_element  # type: ignore[arg-type]
                         )
                         for e in identity.selector.token.select_results(context):
-                            if e not in identity.elements:
+                            if not isinstance(e, XsdElement):
+                                reason = "selector xpath expression can only select elements"
+                                yield self.validation_error(validation, reason, e, **kwargs)
+                            elif e not in identity.elements:
                                 identity.elements[e] = None
 
             if xsd_type.is_blocked(self):
@@ -1128,7 +1131,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     return False
             return True
 
-    def is_overlap(self, other: BaseElementType) -> bool:
+    def is_overlap(self, other: SchemaElementType) -> bool:
         if isinstance(other, XsdElement):
             if self.name == other.name:
                 return True
@@ -1142,7 +1145,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     return True
         return False
 
-    def is_consistent(self, other: BaseElementType, strict: bool = True) -> bool:
+    def is_consistent(self, other: SchemaElementType, strict: bool = True) -> bool:
         """
         Element Declarations Consistent check between two element particles.
 
@@ -1303,7 +1306,7 @@ class Xsd11Element(XsdElement):
 
         return self._head_type or self.type
 
-    def is_overlap(self, other: BaseElementType) -> bool:
+    def is_overlap(self, other: SchemaElementType) -> bool:
         if isinstance(other, XsdElement):
             if self.name == other.name:
                 return True
@@ -1322,7 +1325,7 @@ class Xsd11Element(XsdElement):
                     return True
         return False
 
-    def is_consistent(self, other: BaseElementType, strict: bool = True) -> bool:
+    def is_consistent(self, other: SchemaElementType, strict: bool = True) -> bool:
         if isinstance(other, XsdAnyElement):
             if other.process_contents == 'skip':
                 return True
@@ -1399,7 +1402,7 @@ class XsdAlternative(XsdComponent):
         else:
             self.xpath_default_namespace = self.schema.xpath_default_namespace
         parser = XPath2Parser(
-            namespaces=self.namespaces,  # type: ignore[arg-type]
+            namespaces=self.namespaces,
             strict=False,
             default_namespace=self.xpath_default_namespace
         )
@@ -1478,6 +1481,6 @@ class XsdAlternative(XsdComponent):
 
         try:
             result = list(self.token.select(context=XPathContext(elem)))
-            return cast(bool, self.token.boolean_value(result))  # type: ignore[no-untyped-call]
+            return self.token.boolean_value(result)
         except (TypeError, ValueError):
             return False

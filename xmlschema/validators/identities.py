@@ -12,9 +12,8 @@ This module contains classes for other XML Schema identity constraints.
 """
 import re
 import math
-from collections import Counter
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Pattern, \
-    Tuple, Union
+    Tuple, Union, Counter
 from elementpath import XPath2Parser, ElementPathError, XPathToken, XPathContext, \
     translate_pattern, datatypes
 
@@ -52,9 +51,9 @@ class IdentityXPathContext(XPathContext):
     _iter_nodes = staticmethod(iter_schema_nodes)
 
 
-class IdentityXPathParser(XPath2Parser):  # type: ignore[misc]
+class IdentityXPathParser(XPath2Parser):
     symbol_table = {
-        k: v for k, v in XPath2Parser.symbol_table.items()
+        k: v for k, v in XPath2Parser.symbol_table.items()  # type: ignore[misc]
         if k in XSD_IDENTITY_XPATH_SYMBOLS
     }
     SYMBOLS = XSD_IDENTITY_XPATH_SYMBOLS
@@ -106,7 +105,7 @@ class XsdSelector(XsdComponent):
                 self.xpath_default_namespace = self.schema.xpath_default_namespace
 
         self.parser = IdentityXPathParser(
-            namespaces=self.namespaces,  # type: ignore[arg-type]
+            namespaces=self.namespaces,
             strict=False,
             compatibility_mode=True,
             default_namespace=self.xpath_default_namespace,
@@ -210,16 +209,17 @@ class XsdIdentity(XsdComponent):
 
         context = IdentityXPathContext(self.schema, item=self.parent)  # type: ignore
 
+        self.elements = {}
         try:
-            self.elements = {
-                e: None for e in self.selector.token.select_results(context) if e.name
-            }
+            for e in self.selector.token.select_results(context):
+                if not isinstance(e, XsdComponent) or isinstance(e, XsdAttribute):
+                    self.parse_error("selector xpath expression can only select elements")
+                elif e.name is not None:
+                    self.elements[e] = None  # type: ignore[index]
         except AttributeError:
-            self.elements = {}
+            pass
         else:
-            if any(isinstance(e, XsdAttribute) for e in self.elements):
-                self.parse_error("selector xpath cannot select attributes")
-            elif not self.elements:
+            if not self.elements:
                 # Try to detect target XSD elements extracting QNames
                 # of the leaf elements from the XPath expression and
                 # use them to match global elements.
@@ -431,7 +431,7 @@ class Xsd11Keyref(XsdKeyref):
 class IdentityCounter:
 
     def __init__(self, identity: XsdIdentity, enabled: bool = True) -> None:
-        self.counter: Counter[IdentityCounterType] = Counter()
+        self.counter: Counter[IdentityCounterType] = Counter[IdentityCounterType]()
         self.identity = identity
         self.enabled = enabled
 
