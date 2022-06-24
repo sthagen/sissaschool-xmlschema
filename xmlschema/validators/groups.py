@@ -293,21 +293,20 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         particles = iter(self)
 
         while True:
-            try:
-                item = next(particles)
-            except StopIteration:
-                try:
-                    particles = iterators.pop()
-                except IndexError:
-                    return
-            else:
+            for item in particles:
                 if isinstance(item, XsdGroup) and item.is_pointless(parent=self):
                     iterators.append(particles)
                     particles = iter(item)
                     if len(iterators) > limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(self)
+                    break
                 else:
                     yield item
+            else:
+                try:
+                    particles = iterators.pop()
+                except IndexError:
+                    return
 
     def iter_elements(self) -> Iterator[SchemaElementType]:
         """
@@ -321,21 +320,20 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         particles = iter(self)
 
         while True:
-            try:
-                item = next(particles)
-            except StopIteration:
-                try:
-                    particles = iterators.pop()
-                except IndexError:
-                    return
-            else:
+            for item in particles:
                 if isinstance(item, XsdGroup):
                     iterators.append(particles)
                     particles = iter(item)
                     if len(iterators) > limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(self)
+                    break
                 else:
                     yield item
+            else:
+                try:
+                    particles = iterators.pop()
+                except IndexError:
+                    return
 
     def get_subgroups(self, item: ModelParticleType) -> List['XsdGroup']:
         """
@@ -689,17 +687,11 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 elif not other_item.is_emptiable():
                     return False
 
-        if other.model == 'choice':
-            return True
-
-        while True:
-            try:
-                other_item = next(other_iterator)
-            except StopIteration:
-                return True
-            else:
+        if other.model != 'choice':
+            for other_item in other_iterator:
                 if not other_item.is_emptiable():
                     return False
+        return True
 
     def is_all_restriction(self, other: 'XsdGroup') -> bool:
         if not self.has_occurs_restriction(other):
@@ -787,23 +779,22 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
             particles = iter(self)
 
             while True:
-                try:
-                    item = next(particles)
-                except StopIteration:
-                    try:
-                        current_path.pop()
-                        particles = iterators.pop()
-                    except IndexError:
-                        return
-                else:
+                for item in particles:
                     if isinstance(item, XsdGroup):
                         current_path.append(item)
                         iterators.append(particles)
                         particles = iter(item)
                         if len(iterators) > limits.MAX_MODEL_DEPTH:
                             raise XMLSchemaModelDepthError(self)
+                        break
                     else:
                         yield item
+                else:
+                    try:
+                        current_path.pop()
+                        particles = iterators.pop()
+                    except IndexError:
+                        return
 
         paths: Any = {}
         current_path: List[ModelParticleType] = [self]
@@ -834,7 +825,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                         else:
                             msg = _("{0!r} and {1!r} overlap and are in the same {2!r} group")
                             raise XMLSchemaModelError(self, msg.format(pe, e, pe.parent.model))
-                    elif pe.min_occurs == pe.max_occurs:
+                    elif pe.is_univocal():
                         continue
 
                 if distinguishable_paths(previous_path + [pe], current_path + [e]):
@@ -1018,9 +1009,13 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 continue  # child is a <class 'lxml.etree._Comment'>
 
             while model.element is not None:
-                xsd_element = model.element.match(
-                    child.tag, default_namespace, group=self, occurs=model.occurs
-                )
+                if model.element.max_occurs == 0:
+                    xsd_element = None
+                else:
+                    xsd_element = model.element.match(
+                        child.tag, default_namespace, group=self, occurs=model.occurs
+                    )
+
                 if xsd_element is None:
                     if self.interleave is not None and self.interleave.is_matching(
                             child.tag, default_namespace, self, model.occurs):
@@ -1181,9 +1176,13 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 value = get_qname(default_namespace, name), value
             else:
                 while model.element is not None:
-                    xsd_element = model.element.match(
-                        name, default_namespace, group=self, occurs=model.occurs
-                    )
+                    if model.element.max_occurs == 0:
+                        xsd_element = None
+                    else:
+                        xsd_element = model.element.match(
+                            name, default_namespace, group=self, occurs=model.occurs
+                        )
+
                     if xsd_element is None:
                         for particle, occurs, expected in model.advance():
                             errors.append((index - cdata_index, particle, occurs, expected))
