@@ -206,12 +206,14 @@ class XsdWildcard(XsdComponent):
 
     def is_restriction(self, other: Union[ModelParticleType, 'XsdAnyAttribute'],
                        check_occurs: bool = True) -> bool:
-        if check_occurs and isinstance(self, ParticleMixin) \
-                and not isinstance(other, XsdAnyAttribute) \
-                and not self.has_occurs_restriction(other):
+        if not isinstance(other, self.__class__):
             return False
-        elif not isinstance(other, self.__class__):
-            return False
+        elif check_occurs and isinstance(self, ParticleMixin):
+            if not isinstance(other, XsdAnyAttribute) and \
+                    not self.has_occurs_restriction(other):
+                return False
+            elif self.max_occurs == 0:
+                return True
 
         other: XsdWildcard  # type: ignore[no-redef]
         if other.process_contents == 'strict' and self.process_contents != 'strict':
@@ -466,7 +468,7 @@ class XsdAnyElement(XsdWildcard, ParticleMixin,
 
         try:
             if name[0] != '{' and default_namespace:
-                return self.maps.lookup_element('{%s}%s' % (default_namespace, name))
+                return self.maps.lookup_element(f'{{{default_namespace}}}{name}')
             else:
                 return self.maps.lookup_element(name)
         except LookupError:
@@ -549,7 +551,7 @@ class XsdAnyElement(XsdWildcard, ParticleMixin,
                 yield from xsd_element.iter_encode(value, validation, **kwargs)
                 return
 
-        # Check if there is an xsi:type attribute, but it has to extract
+        # Check if there is a xsi:type attribute, but it has to extract
         # attributes using the converter instance.
         if self.process_contents == 'strict':
             xsd_element = self.maps.validator.create_element(
@@ -660,7 +662,7 @@ class XsdAnyAttribute(XsdWildcard, ValidationMixin[Tuple[str, str], DecodedValue
 
         try:
             if name[0] != '{' and default_namespace:
-                return self.maps.lookup_attribute('{%s}%s' % (default_namespace, name))
+                return self.maps.lookup_attribute(f'{{{default_namespace}}}{name}')
             else:
                 return self.maps.lookup_attribute(name)
         except LookupError:
@@ -771,7 +773,7 @@ class Xsd11AnyElement(XsdAnyElement):
             if not self.is_namespace_allowed(''):
                 return False
         else:
-            name = '{%s}%s' % (default_namespace, name)
+            name = f'{{{default_namespace}}}{name}'
             if not self.is_namespace_allowed('') \
                     and not self.is_namespace_allowed(default_namespace):
                 return False
@@ -834,7 +836,7 @@ class Xsd11AnyAttribute(XsdAnyAttribute):
         elif not default_namespace:
             namespace = ''
         else:
-            name = '{%s}%s' % (default_namespace, name)
+            name = f'{{{default_namespace}}}{name}'
             namespace = default_namespace
 
         if '##defined' in self.not_qname and name in self.maps.attributes:

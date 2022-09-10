@@ -21,7 +21,7 @@ import threading
 import warnings
 import re
 import sys
-from copy import copy
+from copy import copy as _copy
 from itertools import chain
 from operator import attrgetter
 from typing import cast, Callable, ItemsView, List, Optional, Dict, Any, \
@@ -42,7 +42,8 @@ from ..names import VC_MIN_VERSION, VC_MAX_VERSION, VC_TYPE_AVAILABLE, \
     XSD_ANY_SIMPLE_TYPE, XSD_UNION, XSD_LIST, XSD_RESTRICTION
 from ..aliases import ElementType, XMLSourceType, NamespacesType, LocationsType, \
     SchemaType, SchemaSourceType, ConverterType, ComponentClassType, DecodeType, \
-    EncodeType, BaseXsdType, AtomicValueType, ExtraValidatorType, SchemaGlobalType
+    EncodeType, BaseXsdType, ExtraValidatorType, SchemaGlobalType, \
+    FillerType, DepthFillerType, ValueHookType, ElementHookType
 from ..translation import gettext as _
 from ..helpers import prune_etree, get_namespace, get_qname
 from ..namespaces import NamespaceResourcesMap, NamespaceView
@@ -98,7 +99,7 @@ GLOBAL_TAGS = frozenset((XSD_NOTATION, XSD_SIMPLE_TYPE, XSD_COMPLEX_TYPE,
 
 class XMLSchemaMeta(ABCMeta):
     XSD_VERSION: str
-    create_meta_schema: Callable[['XMLSchemaMeta', Optional[str]], SchemaType]
+    create_meta_schema: Callable[['XMLSchemaBase', Optional[str]], SchemaType]
 
     def __new__(mcs, name: str, bases: Tuple[Type[Any], ...], dict_: Dict[str, Any]) \
             -> 'XMLSchemaMeta':
@@ -108,7 +109,7 @@ class XMLSchemaMeta(ABCMeta):
         # For backward compatibility (will be removed in v2.0)
         if 'BUILDERS' in dict_:
             msg = "'BUILDERS' will be removed in v2.0, provide the appropriate " \
-                  "attributes instead (eg. xsd_element_class = Xsd11Element)"
+                  "attributes instead (e.g. xsd_element_class = Xsd11Element)"
             warnings.warn(msg, DeprecationWarning, stacklevel=1)
 
             for k, v in dict_['BUILDERS'].items():
@@ -137,8 +138,11 @@ class XMLSchemaMeta(ABCMeta):
                 if len(bases) > 1:
                     meta_bases += bases[1:]
 
-            meta_schema_class = super(XMLSchemaMeta, mcs).__new__(
-                mcs, meta_schema_class_name, meta_bases, dict_
+            meta_schema_class = cast(
+                'XMLSchemaBase',
+                super(XMLSchemaMeta, mcs).__new__(
+                    mcs, meta_schema_class_name, meta_bases, dict_
+                )
             )
             meta_schema_class.__qualname__ = meta_schema_class_name
             module = sys.modules[dict_['__module__']]
@@ -159,7 +163,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     """
     Base class for an XML Schema instance.
 
-    :param source: an URI that reference to a resource or a file path or a file-like \
+    :param source: a URI that reference to a resource or a file path or a file-like \
     object or a string containing the schema or an Element or an ElementTree document \
     or an :class:`XMLResource` instance. A multi source initialization is supported \
     providing a not empty list of XSD sources.
@@ -174,7 +178,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     :param converter: is an optional argument that can be an :class:`XMLSchemaConverter` \
     subclass or instance, used for defining the default XML data converter for XML Schema instance.
     :param locations: schema extra location hints, that can include custom resource locations \
-    (eg. local XSD file instead of remote resource) or additional namespaces to import after \
+    (e.g. local XSD file instead of remote resource) or additional namespaces to import after \
     processing schema's import statements. Can be a dictionary or a sequence of couples \
     (namespace URI, resource URL). Extra locations passed using a tuple container are not \
     normalized.
@@ -195,7 +199,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     is rebuilt if any base namespace has been overridden by an import. Ignored if the \
     argument *global_maps* is provided.
     :param use_fallback: if `True` the schema processor uses the validator fallback \
-    location hints to load well-known namespaces (eg. xhtml).
+    location hints to load well-known namespaces (e.g. xhtml).
     :param loglevel: for setting a different logging level for schema initialization \
     and building. For default is WARNING (30). For INFO level set it with 20, for \
     DEBUG level with 10. The default loglevel is restored after schema building, \
@@ -232,7 +236,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     :ivar imports: a dictionary of namespace imports of the schema, that maps namespace \
     URI to imported schema object, or `None` in case of unsuccessful import.
     :ivar includes: a dictionary of included schemas, that maps a schema location to an \
-    included schema. It also comprehend schemas included by "xs:redefine" or \
+    included schema. It also comprehends schemas included by "xs:redefine" or \
     "xs:override" statements.
     :ivar warnings: warning messages about failure of import and include elements.
 
@@ -501,14 +505,16 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
         _source: Union[SchemaSourceType, XMLResource]
         for _source in other_sources:
-            if not isinstance(_source, XMLResource):
-                _source = XMLResource(_source, base_url, allow, defuse, timeout)
-
-            if not _source.root.get('targetNamespace') and self.target_namespace:
-                # Adding a chameleon schema: set the namespace with targetNamespace
-                self.add_schema(_source, namespace=self.target_namespace)
+            if isinstance(_source, XMLResource):
+                resource: XMLResource = _source
             else:
-                self.add_schema(_source)
+                resource = XMLResource(_source, base_url, allow, defuse, timeout)
+
+            if not resource.root.get('targetNamespace') and self.target_namespace:
+                # Adding a chameleon schema: set the namespace with targetNamespace
+                self.add_schema(resource, namespace=self.target_namespace)
+            else:
+                self.add_schema(resource)
 
         try:
             if build:
@@ -789,7 +795,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                             parent: Optional[XsdComponent] = None) -> XsdSimpleType:
         """
         Factory function for XSD simple types. Parses the xs:simpleType element and its
-        child component, that can be a restriction, a list or an union. Annotations are
+        child component, that can be a restriction, a list or a union. Annotations are
         linked to simple type instance, omitting the inner annotation if both are given.
         """
         if schema is None:
@@ -851,7 +857,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         Creates a model group related to schema instance that accepts any content.
 
-        :param parent: the parent component to set for the any content group.
+        :param parent: the parent component to set for the content group.
         :param any_element: an optional any element to use for the content group. \
         When provided it's copied, linked to the group and the minOccurs/maxOccurs \
         are set to 0 and 'unbounded'.
@@ -859,7 +865,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         group: XsdGroup = self.xsd_group_class(SEQUENCE_ELEMENT, self, parent)
 
         if isinstance(any_element, XsdAnyElement):
-            particle = any_element.copy()
+            particle = _copy(any_element)
             particle.min_occurs = 0
             particle.max_occurs = None
             particle.parent = group
@@ -889,7 +895,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         Creates an attribute group related to schema instance that accepts any attribute.
 
-        :param parent: the parent component to set for the any attribute group.
+        :param parent: the parent component to set for the attribute group.
         """
         attribute_group = self.xsd_attribute_group_class(
             ATTRIBUTE_GROUP_ELEMENT, self, parent
@@ -904,13 +910,13 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         Creates an empty attribute group related to schema instance.
 
-        :param parent: the parent component to set for the any attribute group.
+        :param parent: the parent component to set for the attribute group.
         """
         return self.xsd_attribute_group_class(ATTRIBUTE_GROUP_ELEMENT, self, parent)
 
     def create_any_type(self) -> XsdComplexType:
         """
-        Creates an xs:anyType equivalent type related with the wildcards
+        Creates a xs:anyType equivalent type related with the wildcards
         connected to global maps of the schema instance in order to do a
         correct namespace lookup during wildcards validation.
         """
@@ -933,7 +939,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     def create_element(self, name: str, parent: Optional[XsdComponent] = None,
                        text: Optional[str] = None, **attrib: Any) -> XsdElement:
         """
-        Creates an xs:element instance related to schema component.
+        Creates a xs:element instance related to schema component.
         Used as dummy element for validation/decoding/encoding
         operations of wildcards and complex types.
         """
@@ -949,7 +955,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         schema: SchemaType = object.__new__(self.__class__)
         schema.__dict__.update(self.__dict__)
-        schema.source = copy(self.source)
+        schema.source = _copy(self.source)
         schema.errors = self.errors[:]
         schema.warnings = self.warnings[:]
         schema.namespaces = dict(self.namespaces)
@@ -1014,7 +1020,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             return False
 
         # No XSD globals: check with a lookup of schema child elements.
-        prefix = '{%s}' % self.target_namespace if self.target_namespace else ''
+        prefix = f'{{{self.target_namespace}}}' if self.target_namespace else ''
         for child in self.source.root:
             if child.tag in {XSD_REDEFINE, XSD_OVERRIDE}:
                 for e in filter(lambda x: x.tag in GLOBAL_TAGS, child):
@@ -1187,9 +1193,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     logger.info("Redefine schema %r", location)
                     schema = self.include_schema(location, self.base_url)
                 except (OSError, IOError) as err:
-                    # If the redefine doesn't contain components (annotation excluded)
-                    # the statement is equivalent to an include, so no error is generated.
-                    # Otherwise fails.
+                    # If the xs:redefine doesn't contain components (annotation excluded)
+                    # the statement is equivalent to an include, so no error is generated,
+                    # otherwise fails.
                     self.warnings.append(_("Redefine schema failed: %s") % str(err))
                     warnings.warn(self.warnings[-1], XMLSchemaIncludeWarning, stacklevel=3)
                     if any(e.tag != XSD_ANNOTATION and not callable(e.tag) for e in child):
@@ -1209,8 +1215,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     schema = self.include_schema(location, self.base_url)
                 except (OSError, IOError) as err:
                     # If the override doesn't contain components (annotation excluded)
-                    # the statement is equivalent to an include, so no error is generated.
-                    # Otherwise fails.
+                    # the statement is equivalent to an include, so no error is generated,
+                    # otherwise fails.
                     self.warnings.append(_("Override schema failed: %s") % str(err))
                     warnings.warn(self.warnings[-1], XMLSchemaIncludeWarning, stacklevel=3)
                     if any(e.tag != XSD_ANNOTATION and not callable(e.tag) for e in child):
@@ -1384,7 +1390,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             validation=self.validation,
             global_maps=self.maps,
             converter=self.converter,
-            locations=self._locations,
+            locations=[x for x in self._locations if x[0] != namespace],
             base_url=self.base_url,
             allow=self.allow,
             defuse=self.defuse,
@@ -1403,7 +1409,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         Add another schema source to the maps of the instance.
 
-        :param source: an URI that reference to a resource or a file path or a file-like \
+        :param source: a URI that reference to a resource or a file path or a file-like \
         object or a string containing the schema or an Element or an ElementTree document.
         :param namespace: is an optional argument that contains the URI of the namespace \
         that has to used in case the schema has no namespace (chameleon schema). For other \
@@ -1417,7 +1423,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             validation=self.validation,
             global_maps=self.maps,
             converter=self.converter,
-            locations=self._locations,
+            locations=[x for x in self._locations if x[0] != namespace],
             base_url=self.base_url,
             allow=self.allow,
             defuse=self.defuse,
@@ -1665,7 +1671,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     "namespace has not an xs:import statement in the schema.")
             raise XMLSchemaNamespaceError(msg.format(qname, namespace))
 
-        return '{%s}%s' % (namespace, local_name)
+        return f'{{{namespace}}}{local_name}'
 
     def validate(self, source: Union[XMLSourceType, XMLResource],
                  path: Optional[str] = None,
@@ -1678,7 +1684,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         Validates an XML data against the XSD schema/component instance.
 
         :param source: the source of XML data. Can be an :class:`XMLResource` instance, a \
-        path to a file or an URI of a resource or an opened file-like object or an Element \
+        path to a file or a URI of a resource or an opened file-like object or an Element \
         instance or an ElementTree instance or a string containing the XML data.
         :param path: is an optional XPath expression that matches the elements of the XML \
         data that have to be decoded. If not provided the XML root element is selected.
@@ -1876,19 +1882,21 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     datetime_types: bool = False,
                     binary_types: bool = False,
                     converter: Optional[ConverterType] = None,
-                    filler: Optional[Callable[[Union[XsdElement, XsdAttribute]], Any]] = None,
+                    filler: Optional[FillerType] = None,
                     fill_missing: bool = False,
+                    keep_empty: bool = False,
                     keep_unknown: bool = False,
                     process_skipped: bool = False,
                     max_depth: Optional[int] = None,
-                    depth_filler: Optional[Callable[[XsdElement], Any]] = None,
-                    value_hook: Optional[Callable[[AtomicValueType, BaseXsdType], Any]] = None,
+                    depth_filler: Optional[DepthFillerType] = None,
+                    value_hook: Optional[ValueHookType] = None,
+                    element_hook: Optional[ElementHookType] = None,
                     **kwargs: Any) -> Iterator[Union[Any, XMLSchemaValidationError]]:
         """
         Creates an iterator for decoding an XML source to a data structure.
 
         :param source: the source of XML data. Can be an :class:`XMLResource` instance, a \
-        path to a file or an URI of a resource or an opened file-like object or an Element \
+        path to a file or a URI of a resource or an opened file-like object or an Element \
         instance or an ElementTree instance or a string containing the XML data.
         :param path: is an optional XPath expression that matches the elements of the XML \
         data that have to be decoded. If not provided the XML root element is selected.
@@ -1917,6 +1925,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         data is replaced by `None`.
         :param fill_missing: if set to `True` the decoder fills also missing attributes. \
         The filling value is `None` or a typed value if the *filler* callback is provided.
+        :param keep_empty: if set to `True` empty elements that are valid are decoded with \
+        an empty string value instead of a `None`.
         :param keep_unknown: if set to `True` unknown tags are kept and are decoded with \
         *xs:anyType*. For default unknown tags not decoded by a wildcard are discarded.
         :param process_skipped: process XML data that match a wildcard with \
@@ -1929,6 +1939,10 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         :param value_hook: an optional function that will be called with any decoded \
         atomic value and the XSD type used for decoding. The return value will be used \
         instead of the original value.
+        :param element_hook: an optional function that is called with decoded element \
+        data before calling the converter decode method. Takes an `ElementData` \
+        instance plus optionally the XSD element and the XSD type, and returns a \
+        new `ElementData` instance.
         :param kwargs: keyword arguments with other options for converter and decoder.
         :return: yields a decoded data object, eventually preceded by a sequence of \
         validation or decoding errors.
@@ -1971,6 +1985,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             kwargs['filler'] = filler
         if fill_missing:
             kwargs['fill_missing'] = fill_missing
+        if keep_empty:
+            kwargs['keep_empty'] = keep_empty
         if keep_unknown:
             kwargs['keep_unknown'] = keep_unknown
         if process_skipped:
@@ -1981,6 +1997,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             kwargs['depth_filler'] = depth_filler
         if value_hook is not None:
             kwargs['value_hook'] = value_hook
+        if element_hook is not None:
+            kwargs['element_hook'] = element_hook
 
         if path:
             selector = resource.iterfind(path, namespaces, nsmap=namespaces)

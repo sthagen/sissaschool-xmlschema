@@ -11,7 +11,7 @@
 This module contains classes for XML Schema elements, complex types and model groups.
 """
 import warnings
-from copy import copy
+from copy import copy as _copy
 from decimal import Decimal
 from types import GeneratorType
 from typing import TYPE_CHECKING, cast, Any, Dict, Iterator, List, Optional, Tuple, Type, Union
@@ -547,6 +547,8 @@ class XsdElement(XsdComponent, ParticleMixin,
         if text is None:
             text = self.fixed if self.fixed is not None else self.default
             if text is None:
+                if self.type.is_valid(''):
+                    self.type.text_decode('')
                 return None
         return self.type.text_decode(text)
 
@@ -723,7 +725,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             if not self.nillable:
                 reason = _("element is not nillable")
                 yield self.validation_error(validation, reason, obj, **kwargs)
-            elif xsi_nil not in {'0', '1', 'false', 'true'}:
+            elif xsi_nil not in ('0', '1', 'false', 'true'):
                 reason = _("xsi:nil attribute must have a boolean value")
                 yield self.validation_error(validation, reason, obj, **kwargs)
             elif xsi_nil in ('0', 'false'):
@@ -770,7 +772,7 @@ class XsdElement(XsdComponent, ParticleMixin,
 
             text = obj.text
             if self.fixed is not None:
-                if text is None:
+                if not text:
                     text = self.fixed
                 elif text == self.fixed:
                     pass
@@ -801,20 +803,13 @@ class XsdElement(XsdComponent, ParticleMixin,
                     msg = _("missing enumeration facet in xs:NOTATION subtype")
                     yield self.validation_error(validation, msg, text, **kwargs)
 
-            if text is None:
-                for result in content_decoder.iter_decode('', validation, **kwargs):
-                    if isinstance(result, XMLSchemaValidationError):
-                        yield self.validation_error(validation, result, obj, **kwargs)
-                        if 'filler' in kwargs:
-                            value = kwargs['filler'](self)
-            else:
-                for result in content_decoder.iter_decode(text, validation, **kwargs):
-                    if isinstance(result, XMLSchemaValidationError):
-                        yield self.validation_error(validation, result, obj, **kwargs)
-                    elif result is None and 'filler' in kwargs:
-                        value = kwargs['filler'](self)
-                    else:
-                        value = result
+            for result in content_decoder.iter_decode(text or '', validation, **kwargs):
+                if isinstance(result, XMLSchemaValidationError):
+                    yield self.validation_error(validation, result, obj, **kwargs)
+                elif result is None and 'filler' in kwargs:
+                    value = kwargs['filler'](self)
+                elif text or kwargs.get('keep_empty'):
+                    value = result
 
             if 'value_hook' in kwargs:
                 value = kwargs['value_hook'](value, xsd_type)
@@ -837,6 +832,9 @@ class XsdElement(XsdComponent, ParticleMixin,
 
         if converter is not None:
             element_data = ElementData(obj.tag, value, content, attributes)
+            if 'element_hook' in kwargs:
+                element_data = kwargs['element_hook'](element_data, self, xsd_type)
+
             try:
                 yield converter.element_decode(element_data, self, xsd_type, level)
             except (ValueError, TypeError) as err:
@@ -868,7 +866,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                         xsd_fields = identity.get_fields(xsd_element.xpath_node)
                         identity.elements[xsd_element] = xsd_fields
                 else:
-                    xsd_element = cast(XsdElement, self.copy())
+                    xsd_element = _copy(self)
                     xsd_element.type = xsd_type
                     xsd_fields = identity.get_fields(xsd_element.xpath_node)
 
@@ -880,7 +878,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     try:
                         resource = cast(XMLResource, kwargs['source'])
                     except KeyError:
-                        element_node = LazyElementNode(obj, nsmap=copy(namespaces))
+                        element_node = LazyElementNode(obj, nsmap=_copy(namespaces))
                     else:
                         element_node = resource.get_xpath_node(obj)
 
@@ -990,7 +988,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 if default_namespace and not isinstance(xsd_type, XsdSimpleType):
                     # Adjust attributes mapped into default namespace
 
-                    ns_part = '{%s}' % default_namespace
+                    ns_part = f'{{{default_namespace}}}'
                     for k in list(element_data.attributes):
                         if not k.startswith(ns_part):
                             continue
@@ -1020,7 +1018,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 pass
             elif self.fixed is not None:
                 errors.append("xsi:nil='true' but the element has a fixed value.")
-            elif element_data.text is not None or element_data.content:
+            elif element_data.text not in (None, '') or element_data.content:
                 errors.append("xsi:nil='true' but the element is not empty.")
             else:
                 elem = converter.etree_element(element_data.tag, attrib=attributes, level=level)
@@ -1079,7 +1077,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         if not name:
             return False
         elif default_namespace and name[0] != '{':
-            qname = '{%s}%s' % (default_namespace, name)
+            qname = f'{{{default_namespace}}}{name}'
             if name == self.name or qname == self.name:
                 return True
             return any(name == e.name or qname == e.name for e in self.iter_substitutes())
@@ -1093,7 +1091,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         if not name:
             return None
         elif default_namespace and name[0] != '{':
-            qname = '{%s}%s' % (default_namespace, name)
+            qname = f'{{{default_namespace}}}{name}'
             if name == self.name or qname == self.name:
                 return self
 
@@ -1124,8 +1122,8 @@ class XsdElement(XsdComponent, ParticleMixin,
                         other.min_occurs != other.max_occurs and \
                         self.max_occurs != 0 and not other.abstract \
                         and self.xsd_version == '1.0':
-                    # An UPA violation case. Base is the head element, it's not
-                    # abstract and has non deterministic occurs: this is less
+                    # A UPA violation case. Base is the head element, it's not
+                    # abstract and has non-deterministic occurs: this is less
                     # restrictive than W3C test group (elemZ026), marked as
                     # invalid despite it's based on an abstract declaration.
                     # See also test case invalid_restrictions1.xsd.
@@ -1139,6 +1137,8 @@ class XsdElement(XsdComponent, ParticleMixin,
 
             if check_occurs and not self.has_occurs_restriction(other):
                 return False
+            elif self.max_occurs == 0 and check_occurs:
+                return True  # type is not effective if the element can't have occurrences
             elif not self.is_consistent(other) and self.type.elem is not other.type.elem and \
                     not self.type.is_derived(other.type, 'restriction') and not other.type.abstract:
                 return False

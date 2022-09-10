@@ -15,6 +15,7 @@ import json
 import math
 from decimal import Decimal
 from collections.abc import MutableMapping, MutableSequence, Set
+from textwrap import dedent
 from xml.etree import ElementTree
 
 try:
@@ -25,9 +26,9 @@ except ImportError:
 from elementpath import datatypes
 import xmlschema
 from xmlschema import XMLSchemaValidationError, ParkerConverter, BadgerFishConverter, \
-    AbderaConverter, JsonMLConverter, ColumnarConverter
+    AbderaConverter, JsonMLConverter, ColumnarConverter, ElementData
 
-from xmlschema.names import XSD_STRING
+from xmlschema.names import XSD_STRING, XSI_NIL
 from xmlschema.converters import UnorderedConverter
 from xmlschema.validators import XMLSchema11
 from xmlschema.testing import XsdValidatorTestCase, etree_elements_assert_equal
@@ -975,6 +976,82 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertTrue(xsd_schema.is_valid(source=xml_string_2, use_defaults=False))
         obj = xsd_schema.decode(xml_string_2, use_defaults=False)
         self.check_etree_elements(ElementTree.fromstring(xml_string_2), xsd_schema.encode(obj))
+
+    def test_keep_empty(self):
+        schema = self.schema_class(self.casepath('issues/issue_322/issue_322.xsd'))
+        xml_file = self.casepath('issues/issue_322/issue_322.xml')
+
+        data = schema.decode(xml_file)
+        self.assertEqual(data, {
+            '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+            'emptystring': None,
+            'nillstring': {'@xsi:nil': 'true'}
+        })
+
+        data = schema.decode(xml_file, keep_empty=True)
+        self.assertEqual(data, {
+            '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+            'emptystring': '',
+            'nillstring': {'@xsi:nil': 'true'}
+        })
+
+        schema = self.schema_class(dedent("""\
+        <?xml version="1.0"?>
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:element name="note">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="emptiable" type="xs:string"/>
+                <xs:element name="filled">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                      <xs:minLength value="1"/>
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:element>
+                <xs:element name="number" type="xs:int"/>
+              </xs:sequence>
+            </xs:complexType>
+          </xs:element>
+        </xs:schema>"""))
+
+        xml_data = "<note><emptiable/><filled/><number/></note>"
+        data, errors = schema.decode(xml_data, validation='lax', keep_empty=True)
+        self.assertEqual(data, {'emptiable': '', 'filled': '', 'number': None})
+        self.assertEqual(len(errors), 2)
+
+        data = schema.decode(xml_data, validation='skip', keep_empty=True)
+        self.assertEqual(data, {'emptiable': '', 'filled': '', 'number': ''})
+
+    def test_element_hook__issue_322(self):
+        schema = self.schema_class(self.casepath('issues/issue_322/issue_322.xsd'))
+        xml_file = self.casepath('issues/issue_322/issue_322.xml')
+
+        def element_hook(element_data: ElementData, *_args):
+            if not element_data.attributes:
+                return element_data
+
+            return ElementData(
+                element_data.tag,
+                element_data.text,
+                element_data.content,
+                [x for x in element_data.attributes if x[0] != XSI_NIL]
+            )
+
+        data = schema.decode(xml_file, element_hook=element_hook)
+        self.assertEqual(data, {
+            '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+            'emptystring': None,
+            'nillstring': None,
+        })
+
+        # Resolution for issue 322
+        data = schema.decode(xml_file, keep_empty=True, element_hook=element_hook)
+        self.assertEqual(data, {
+            '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+            'emptystring': '',
+            'nillstring': None,
+        })
 
     def test_default_namespace__issue_077(self):
         xs = self.schema_class("""<?xml version="1.0" encoding="UTF-8"?>

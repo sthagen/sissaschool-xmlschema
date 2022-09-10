@@ -12,7 +12,7 @@ This module contains classes for XML Schema simple data types.
 """
 from decimal import DecimalException
 from typing import cast, Any, Callable, Dict, Iterator, List, \
-    Optional, Set, Union, Tuple, Type
+    Optional, Pattern, Set, Union, Tuple, Type
 from xml.etree import ElementTree
 
 from ..aliases import ElementType, AtomicValueType, ComponentClassType, \
@@ -96,6 +96,7 @@ class XsdSimpleType(XsdType, ValidationMixin[Union[str, bytes], DecodedValueType
             if white_space is not None:
                 self.white_space = white_space
 
+            p: Pattern[str]
             patterns = self.get_facet(XSD_PATTERN)
             if isinstance(patterns, XsdPatternFacets):
                 self.patterns = patterns
@@ -631,12 +632,11 @@ class XsdAtomicBuiltin(XsdAtomic):
         try:
             result = self.to_python(obj)
         except (ValueError, DecimalException) as err:
-            # todo: maybe need to translate python error messages?
             yield XMLSchemaDecodeError(self, obj, self.to_python, reason=str(err))
             yield None
             return
         except TypeError:
-            # xs:error type (eg. an XSD 1.1 type alternative used to catch invalid values)
+            # xs:error type (e.g. an XSD 1.1 type alternative used to catch invalid values)
             reason = _("invalid value {!r}").format(obj)
             yield self.validation_error(validation, error=reason, obj=obj)
             yield None
@@ -658,7 +658,7 @@ class XsdAtomicBuiltin(XsdAtomic):
                     pass
                 else:
                     try:
-                        result = '{%s}%s' % (kwargs['namespaces'][prefix], name)
+                        result = f"{{{kwargs['namespaces'][prefix]}}}{name}"
                     except (TypeError, KeyError):
                         try:
                             if kwargs['source'].namespace != XSD_NAMESPACE:
@@ -673,7 +673,7 @@ class XsdAtomicBuiltin(XsdAtomic):
                     pass
                 else:
                     if default_namespace:
-                        result = '{%s}%s' % (default_namespace, obj)
+                        result = f'{{{default_namespace}}}{obj}'
 
         elif self.name == XSD_IDREF:
             try:
@@ -1140,7 +1140,7 @@ class XsdUnion(XsdSimpleType):
                     return
                 elif validation == 'strict':
                     # In 'strict' mode avoid lax encoding by similar types
-                    # (eg. float encoded by int)
+                    # (e.g. float encoded by int)
                     break
 
         if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
@@ -1394,8 +1394,6 @@ class XsdAtomicRestriction(XsdAtomic):
         for result in base_type.iter_decode(obj, validation, **kwargs):
             if isinstance(result, XMLSchemaValidationError):
                 yield result
-                if isinstance(result, XMLSchemaDecodeError):
-                    yield str(obj) if validation == 'skip' else None
             else:
                 if result is not None:
                     for validator in self.validators:
