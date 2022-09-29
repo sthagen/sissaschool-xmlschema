@@ -15,11 +15,11 @@ from typing import Any, Dict, List, Optional, Type, Union, Tuple, \
 from elementpath.etree import ElementTree, etree_tostring
 
 from .exceptions import XMLSchemaTypeError, XMLSchemaValueError, XMLResourceError
-from .names import XSD_NAMESPACE, XSI_TYPE
+from .names import XSD_NAMESPACE, XSI_TYPE, XSD_SCHEMA
 from .aliases import ElementType, XMLSourceType, NamespacesType, LocationsType, \
     LazyType, SchemaSourceType, ConverterType, DecodeType, EncodeType, \
     JsonDecodeType
-from .helpers import is_etree_document
+from .helpers import get_extended_qname, is_etree_document
 from .resources import fetch_schema_locations, XMLResource
 from .validators import XMLSchema10, XMLSchemaBase, XMLSchemaValidationError
 
@@ -73,10 +73,11 @@ def get_context(xml_document: Union[XMLSourceType, XMLResource],
                 return resource, cls(schema, **kwargs)
 
     if schema is None:
-        if XSI_TYPE in resource.root.attrib and cls.meta_schema is not None:
+        if cls.meta_schema is not None and \
+                (XSI_TYPE in resource.root.attrib or XSD_NAMESPACE in resource.namespace):
             return resource, cls.meta_schema
         elif dummy_schema:
-            return resource, get_dummy_schema(resource, cls)
+            return resource, get_dummy_schema(resource.root.tag, cls)
         else:
             msg = "cannot get a schema for XML data, provide a schema argument"
             raise XMLSchemaValueError(msg)
@@ -88,8 +89,7 @@ def get_context(xml_document: Union[XMLSourceType, XMLResource],
                              defuse=defuse, timeout=timeout)
 
 
-def get_dummy_schema(resource: XMLResource, cls: Type[XMLSchemaBase]) -> XMLSchemaBase:
-    tag = resource.root.tag
+def get_dummy_schema(tag: str, cls: Type[XMLSchemaBase]) -> XMLSchemaBase:
     if tag.startswith('{'):
         namespace, name = tag[1:].split('}')
     else:
@@ -225,8 +225,7 @@ def iter_decode(xml_document: Union[XMLSourceType, XMLResource],
                 schema: Optional[XMLSchemaBase] = None,
                 cls: Optional[Type[XMLSchemaBase]] = None,
                 path: Optional[str] = None,
-                validation: str = 'strict',
-                process_namespaces: bool = True,
+                validation: str = 'lax',
                 locations: Optional[LocationsType] = None,
                 base_url: Optional[str] = None,
                 defuse: str = 'remote',
@@ -251,8 +250,6 @@ def iter_decode(xml_document: Union[XMLSourceType, XMLResource],
     data that have to be decoded. If not provided the XML root element is used.
     :param validation: defines the XSD validation mode to use for decode, can be \
     'strict', 'lax' or 'skip'.
-    :param process_namespaces: indicates whether to use namespace information in \
-    the decoding process.
     :param locations: additional schema location hints, in case a schema instance \
     has to be built.
     :param base_url: is an optional custom base URL for remapping relative locations, for \
@@ -272,8 +269,7 @@ def iter_decode(xml_document: Union[XMLSourceType, XMLResource],
     """
     source, _schema = get_context(xml_document, schema, cls, locations, base_url,
                                   defuse, timeout, lazy, use_location_hints)
-    yield from _schema.iter_decode(source, path=path, validation=validation,
-                                   process_namespaces=process_namespaces, **kwargs)
+    yield from _schema.iter_decode(source, path=path, validation=validation, **kwargs)
 
 
 def to_dict(xml_document: Union[XMLSourceType, XMLResource],
@@ -281,7 +277,6 @@ def to_dict(xml_document: Union[XMLSourceType, XMLResource],
             cls: Optional[Type[XMLSchemaBase]] = None,
             path: Optional[str] = None,
             validation: str = 'strict',
-            process_namespaces: bool = True,
             locations: Optional[LocationsType] = None,
             base_url: Optional[str] = None,
             defuse: str = 'remote',
@@ -300,8 +295,7 @@ def to_dict(xml_document: Union[XMLSourceType, XMLResource],
     """
     source, _schema = get_context(xml_document, schema, cls, locations, base_url,
                                   defuse, timeout, lazy, use_location_hints)
-    return _schema.decode(source, path=path, validation=validation,
-                          process_namespaces=process_namespaces, **kwargs)
+    return _schema.decode(source, path=path, validation=validation, **kwargs)
 
 
 def to_json(xml_document: Union[XMLSourceType, XMLResource],
@@ -309,8 +303,7 @@ def to_json(xml_document: Union[XMLSourceType, XMLResource],
             schema: Optional[XMLSchemaBase] = None,
             cls: Optional[Type[XMLSchemaBase]] = None,
             path: Optional[str] = None,
-            converter: Optional[ConverterType] = None,
-            process_namespaces: bool = True,
+            validation: str = 'strict',
             locations: Optional[LocationsType] = None,
             base_url: Optional[str] = None,
             defuse: str = 'remote',
@@ -335,10 +328,8 @@ def to_json(xml_document: Union[XMLSourceType, XMLResource],
     :class:`XMLSchema10`).
     :param path: is an optional XPath expression that matches the elements of the XML \
     data that have to be decoded. If not provided the XML root element is used.
-    :param converter: an :class:`XMLSchemaConverter` subclass or instance to use \
-    for the decoding.
-    :param process_namespaces: indicates whether to use namespace information in \
-    the decoding process.
+    :param validation: defines the XSD validation mode to use for decode, can be \
+    'strict', 'lax' or 'skip'.
     :param locations: additional schema location hints, in case the schema instance \
     has to be built.
     :param base_url: is an optional custom base URL for remapping relative locations, for \
@@ -366,15 +357,13 @@ def to_json(xml_document: Union[XMLSourceType, XMLResource],
         json_options = {}
     if 'decimal_type' not in kwargs:
         kwargs['decimal_type'] = float
-    kwargs['converter'] = converter
-    kwargs['process_namespaces'] = process_namespaces
 
     errors: List[XMLSchemaValidationError] = []
 
     if path is None and source.is_lazy() and 'cls' not in json_options:
         json_options['cls'] = get_lazy_json_encoder(errors)
 
-    obj = _schema.decode(source, path=path, **kwargs)
+    obj = _schema.decode(source, path=path, validation=validation, **kwargs)
     if isinstance(obj, tuple):
         errors.extend(obj[1])
         if fp is not None:
@@ -391,10 +380,94 @@ def to_json(xml_document: Union[XMLSourceType, XMLResource],
         return result if not errors else (result, tuple(errors))
 
 
+def to_etree(obj: Any,
+             schema: Optional[Union[XMLSchemaBase, SchemaSourceType]] = None,
+             cls: Optional[Type[XMLSchemaBase]] = None,
+             path: Optional[str] = None,
+             validation: str = 'strict',
+             namespaces: Optional[NamespacesType] = None,
+             use_defaults: bool = True,
+             converter: Optional[ConverterType] = None,
+             unordered: bool = False,
+             **kwargs: Any) -> EncodeType[ElementType]:
+    """
+    Encodes a data structure/object to an ElementTree's Element.
+
+    :param obj: the Python object that has to be encoded to XML data.
+    :param schema: can be a schema instance or a file-like object or a file path or a URL \
+    of a resource or a string containing the schema. If not provided a dummy schema is used.
+    :param cls: class to use for building the schema instance (for default uses \
+    :class:`XMLSchema10`).
+    :param path: is an optional XPath expression for selecting the element of the schema \
+    that matches the data that has to be encoded. For default the first global element of \
+    the schema is used.
+    :param validation: the XSD validation mode. Can be 'strict', 'lax' or 'skip'.
+    :param namespaces: is an optional mapping from namespace prefix to URI.
+    :param use_defaults: whether to use default values for filling missing data.
+    :param converter: an :class:`XMLSchemaConverter` subclass or instance to use for \
+    the encoding.
+    :param unordered: a flag for explicitly activating unordered encoding mode for \
+    content model data. This mode uses content models for a reordered-by-model \
+    iteration of the child elements.
+    :param kwargs: other optional arguments of :meth:`XMLSchemaBase.iter_encode` and \
+    options for the converter.
+    :return: An element tree's Element instance. If ``validation='lax'`` keyword argument is \
+    provided the validation errors are collected and returned coupled in a tuple with the \
+    Element instance.
+    :raises: :exc:`XMLSchemaValidationError` if the object is not encodable by the schema, \
+    or also if it's invalid when ``validation='strict'`` is provided.
+    """
+    if cls is None:
+        cls = XMLSchema10
+    elif not issubclass(cls, XMLSchemaBase):
+        raise XMLSchemaTypeError("invalid schema class %r" % cls)
+
+    if schema is None:
+        if not path:
+            raise XMLSchemaTypeError("without schema a path is required "
+                                     "for building a dummy schema")
+
+        if namespaces is None:
+            tag = get_extended_qname(path, {'xsd': XSD_NAMESPACE, 'xs': XSD_NAMESPACE})
+        else:
+            tag = get_extended_qname(path, namespaces)
+
+        if not tag.startswith('{') and ':' in tag:
+            raise XMLSchemaTypeError("without schema the path must be "
+                                     "mappable to a local or extended name")
+
+        if tag == XSD_SCHEMA:
+            assert cls.meta_schema is not None
+            _schema = cls.meta_schema
+        else:
+            _schema = get_dummy_schema(tag, cls)
+
+    elif isinstance(schema, XMLSchemaBase):
+        _schema = schema
+    else:
+        _schema = cls(schema)
+
+    return _schema.encode(
+        obj=obj,
+        path=path,
+        validation=validation,
+        namespaces=namespaces,
+        use_defaults=use_defaults,
+        converter=converter,
+        unordered=unordered,
+        **kwargs
+    )
+
+
 def from_json(source: Union[str, bytes, IO[str]],
-              schema: XMLSchemaBase,
+              schema: Optional[Union[XMLSchemaBase, SchemaSourceType]] = None,
+              cls: Optional[Type[XMLSchemaBase]] = None,
               path: Optional[str] = None,
+              validation: str = 'strict',
+              namespaces: Optional[NamespacesType] = None,
+              use_defaults: bool = True,
               converter: Optional[ConverterType] = None,
+              unordered: bool = False,
               json_options: Optional[Dict[str, Any]] = None,
               **kwargs: Any) -> EncodeType[ElementType]:
     """
@@ -403,11 +476,19 @@ def from_json(source: Union[str, bytes, IO[str]],
     :param source: can be a string or a :meth:`read()` supporting file-like object \
     containing the JSON document.
     :param schema: an :class:`XMLSchema10` or an :class:`XMLSchema11` instance.
+    :param cls: class to use for building the schema instance (for default uses \
+    :class:`XMLSchema10`).
     :param path: is an optional XPath expression for selecting the element of the schema \
     that matches the data that has to be encoded. For default the first global element of \
     the schema is used.
-    :param converter: an :class:`XMLSchemaConverter` subclass or instance to use \
-    for the encoding.
+    :param validation: the XSD validation mode. Can be 'strict', 'lax' or 'skip'.
+    :param namespaces: is an optional mapping from namespace prefix to URI.
+    :param use_defaults: whether to use default values for filling missing data.
+    :param converter: an :class:`XMLSchemaConverter` subclass or instance to use for \
+    the encoding.
+    :param unordered: a flag for explicitly activating unordered encoding mode for \
+    content model data. This mode uses content models for a reordered-by-model \
+    iteration of the child elements.
     :param json_options: a dictionary with options for the JSON deserializer.
     :param kwargs: other optional arguments of :meth:`XMLSchemaBase.iter_encode` and \
     options for converter.
@@ -417,9 +498,7 @@ def from_json(source: Union[str, bytes, IO[str]],
     :raises: :exc:`XMLSchemaValidationError` if the object is not encodable by the schema, \
     or also if it's invalid when ``validation='strict'`` is provided.
     """
-    if not isinstance(schema, XMLSchemaBase):
-        raise XMLSchemaTypeError("invalid type %r for argument 'schema'" % type(schema))
-    elif json_options is None:
+    if json_options is None:
         json_options = {}
 
     if isinstance(source, (str, bytes)):
@@ -427,7 +506,18 @@ def from_json(source: Union[str, bytes, IO[str]],
     else:
         obj = json.load(source, **json_options)
 
-    return schema.encode(obj, path=path, converter=converter, **kwargs)
+    return to_etree(
+        obj=obj,
+        schema=schema,
+        cls=cls,
+        path=path,
+        validation=validation,
+        namespaces=namespaces,
+        use_defaults=use_defaults,
+        converter=converter,
+        unordered=unordered,
+        **kwargs
+    )
 
 
 class XmlDocument(XMLResource):
@@ -513,7 +603,7 @@ class XmlDocument(XMLResource):
                     msg = "cannot get a schema for XML data, provide a schema argument"
                     raise XMLSchemaValueError(msg)
                 else:
-                    self._fallback_schema = get_dummy_schema(self, cls)
+                    self._fallback_schema = get_dummy_schema(self.root.tag, cls)
 
         if self.schema is None:
             pass

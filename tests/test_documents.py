@@ -16,6 +16,7 @@ import io
 import pathlib
 import tempfile
 from decimal import Decimal
+from textwrap import dedent
 from xml.etree import ElementTree
 
 try:
@@ -25,12 +26,14 @@ except ImportError:
 
 from xmlschema import XMLSchema10, XMLSchema11, XmlDocument, \
     XMLResourceError, XMLSchemaValidationError, XMLSchemaDecodeError, \
-    to_json, from_json, validate, XMLSchemaParseError
+    to_json, from_json, validate, XMLSchemaParseError, is_valid, to_dict, \
+    to_etree, JsonMLConverter
 
-from xmlschema.names import XSD_NAMESPACE, XSI_NAMESPACE
+from xmlschema.names import XSD_NAMESPACE, XSI_NAMESPACE, XSD_SCHEMA
 from xmlschema.helpers import is_etree_element, is_etree_document
 from xmlschema.resources import XMLResource
 from xmlschema.documents import get_context
+from xmlschema.testing import etree_elements_assert_equal
 
 
 TEST_CASES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_cases/')
@@ -73,19 +76,70 @@ class TestXmlDocuments(unittest.TestCase):
         self.assertEqual(len(errors), 0)
         self.assertIn('"object": [null, null]', json_data)
 
+    def test_to_etree_api(self):
+        data = to_dict(self.col_xml_file)
+        root_tag = '{http://example.com/ns/collection}collection'
+
+        with self.assertRaises(TypeError) as ctx:
+            to_etree(data)
+        self.assertIn("a path is required for building a dummy schema", str(ctx.exception))
+
+        collection = to_etree(data, schema=self.col_xsd_file)
+        self.assertEqual(collection.tag, root_tag)
+
+        col_schema = XMLSchema10(self.col_xsd_file)
+        collection = to_etree(data, schema=col_schema)
+        self.assertEqual(collection.tag, root_tag)
+
+        collection = to_etree(data, path=root_tag)
+        self.assertEqual(collection.tag, root_tag)
+
+    def test_to_etree_api_on_schema__issue_325(self):
+        col_root = ElementTree.parse(self.col_xsd_file).getroot()
+        kwargs = dict(use_defaults=False, converter=JsonMLConverter)
+        data = to_dict(self.col_xsd_file, **kwargs)
+
+        with self.assertRaises(TypeError) as ctx:
+            to_etree(data)
+        self.assertIn("a path is required for building a dummy schema", str(ctx.exception))
+
+        collection_xsd = to_etree(data, schema=XMLSchema10.meta_schema.url, **kwargs)
+        self.assertEqual(collection_xsd.tag, XSD_SCHEMA)
+        self.assertIsNone(etree_elements_assert_equal(collection_xsd, col_root, strict=False))
+
+        collection_xsd = to_etree(data, path=XSD_SCHEMA, **kwargs)
+        self.assertIsNone(etree_elements_assert_equal(collection_xsd, col_root, strict=False))
+
+        # automatically map xs/xsd prefixes and use meta-schema
+        collection_xsd = to_etree(data, path='xs:schema', **kwargs)
+        self.assertIsNone(etree_elements_assert_equal(collection_xsd, col_root, strict=False))
+
+        with self.assertRaises(TypeError) as ctx:
+            to_etree(data, path='xs:schema', namespaces={}, **kwargs)
+        self.assertIn("the path must be mappable to a local or extended name",
+                      str(ctx.exception))
+
     def test_from_json_api(self):
         json_data = to_json(self.col_xml_file, lazy=True)
+        root_tag = '{http://example.com/ns/collection}collection'
+
         with self.assertRaises(TypeError) as ctx:
-            from_json(json_data, self.col_xsd_file)
-        self.assertIn("invalid type <class 'str'> for argument 'schema'", str(ctx.exception))
+            from_json(json_data)
+        self.assertIn("a path is required for building a dummy schema", str(ctx.exception))
+
+        collection = from_json(json_data, schema=self.col_xsd_file)
+        self.assertEqual(collection.tag, root_tag)
 
         col_schema = XMLSchema10(self.col_xsd_file)
         collection = from_json(json_data, schema=col_schema)
-        self.assertEqual(collection.tag, '{http://example.com/ns/collection}collection')
+        self.assertEqual(collection.tag, root_tag)
 
         col_schema = XMLSchema10(self.col_xsd_file)
         collection = from_json(json_data, col_schema, json_options={'parse_float': Decimal})
-        self.assertEqual(collection.tag, '{http://example.com/ns/collection}collection')
+        self.assertEqual(collection.tag, root_tag)
+
+        collection = from_json(json_data, path=root_tag)
+        self.assertEqual(collection.tag, root_tag)
 
     def test_get_context_with_schema(self):
         source, schema = get_context(self.col_xml_file)
@@ -443,6 +497,49 @@ class TestXmlDocuments(unittest.TestCase):
 
         with self.assertRaises(XMLResourceError):
             XmlDocument(self.vh_xml_file, lazy=True).tostring()
+
+    def test_get_context_on_xsd_schema__issue_325(self):
+        source, schema = get_context(self.col_xsd_file)
+        self.assertIsInstance(source, XMLResource)
+        self.assertTrue(source.name, 'collection.xsd')
+        self.assertIs(schema, XMLSchema10.meta_schema)
+
+        source, schema = get_context(self.col_xsd_file, cls=XMLSchema11)
+        self.assertIsInstance(source, XMLResource)
+        self.assertTrue(source.name, 'collection.xsd')
+        self.assertIs(schema, XMLSchema11.meta_schema)
+
+    def test_document_api_on_xsd_schema__issue_325(self):
+        self.assertIsNone(validate(self.col_xsd_file))
+        self.assertTrue(is_valid(self.col_xsd_file))
+
+        valid_xsd = dedent("""\
+        <xs:schema targetNamespace="http://example.com/ns/collection"
+            xmlns:xs="http://www.w3.org/2001/XMLSchema" >
+          <xs:element name="collection"/>
+        </xs:schema>""")
+        self.assertTrue(is_valid(valid_xsd))
+
+        invalid_xsd = dedent("""\
+        <xs:schema targetNamespace="http://example.com/ns/collection"
+            xmlns:xs="http://www.w3.org/2001/XMLSchema" >
+          <xs:element ref="collection"/>
+        </xs:schema>""")
+        self.assertFalse(is_valid(invalid_xsd))
+
+        obj = to_dict(valid_xsd)
+        self.assertDictEqual(obj, {
+            '@xmlns:xs': 'http://www.w3.org/2001/XMLSchema',
+            '@targetNamespace': 'http://example.com/ns/collection',
+            '@finalDefault': [],
+            '@blockDefault': [],
+            '@attributeFormDefault': 'unqualified',
+            '@elementFormDefault': 'unqualified',
+            'xs:element': {'@name': 'collection', '@abstract': False, '@nillable': False}})
+
+        root = XMLSchema10.meta_schema.encode(obj)
+        self.assertTrue(hasattr(root, 'tag'))
+        self.assertEqual(root.tag, '{http://www.w3.org/2001/XMLSchema}schema')
 
 
 if __name__ == '__main__':
