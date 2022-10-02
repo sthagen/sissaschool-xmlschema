@@ -106,23 +106,6 @@ class XMLSchemaMeta(ABCMeta):
         assert bases, "a base class is mandatory"
         base_class = bases[0]
 
-        # For backward compatibility (will be removed in v2.0)
-        if 'BUILDERS' in dict_:
-            msg = "'BUILDERS' will be removed in v2.0, provide the appropriate " \
-                  "attributes instead (e.g. xsd_element_class = Xsd11Element)"
-            warnings.warn(msg, DeprecationWarning, stacklevel=1)
-
-            for k, v in dict_['BUILDERS'].items():
-                if k == 'simple_type_factory':
-                    dict_['simple_type_factory'] = staticmethod(v)
-                    continue
-
-                attr_name = 'xsd_{}'.format(k)
-                if not hasattr(base_class, attr_name):
-                    continue
-                elif getattr(base_class, attr_name) is not v:
-                    dict_[attr_name] = v
-
         if isinstance(dict_.get('meta_schema'), str):
             # Build a new meta-schema class and register it into module's globals
             meta_schema_file: str = dict_.pop('meta_schema')
@@ -989,8 +972,10 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """
         if cls.meta_schema is None:
             raise XMLSchemaRuntimeError(_("meta-schema unavailable for %r") % cls)
-        elif not cls.meta_schema.maps.types:
-            cls.meta_schema.maps.build()
+
+        msg = f"check_schema() class method will be removed in v3.0, use " \
+              f"{cls.__name__}.meta_schema instead for validating XSD data."
+        warnings.warn(msg, DeprecationWarning, stacklevel=1)
 
         for error in cls.meta_schema.iter_errors(schema.source, namespaces=namespaces):
             raise error
@@ -1688,7 +1673,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                  use_defaults: bool = True,
                  namespaces: Optional[NamespacesType] = None,
                  max_depth: Optional[int] = None,
-                 extra_validator: Optional[ExtraValidatorType] = None) -> None:
+                 extra_validator: Optional[ExtraValidatorType] = None,
+                 allow_empty: bool = True) -> None:
         """
         Validates an XML data against the XSD schema/component instance.
 
@@ -1709,10 +1695,12 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         element, with the XML element as 1st argument and the corresponding XSD \
         element as 2nd argument. It can be also a generator function and has to \
         raise/yield :exc:`XMLSchemaValidationError` exceptions.
+        :param allow_empty: for default providing a path argument empty selections \
+        of XML data are allowed. Provide `False` to generate a validation error.
         :raises: :exc:`XMLSchemaValidationError` if the XML data instance is invalid.
         """
-        for error in self.iter_errors(source, path, schema_path, use_defaults,
-                                      namespaces, max_depth, extra_validator):
+        for error in self.iter_errors(source, path, schema_path, use_defaults, namespaces,
+                                      max_depth, extra_validator, allow_empty):
             raise error
 
     def is_valid(self, source: Union[XMLSourceType, XMLResource],
@@ -1721,13 +1709,14 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                  use_defaults: bool = True,
                  namespaces: Optional[NamespacesType] = None,
                  max_depth: Optional[int] = None,
-                 extra_validator: Optional[ExtraValidatorType] = None) -> bool:
+                 extra_validator: Optional[ExtraValidatorType] = None,
+                 allow_empty: bool = True) -> bool:
         """
         Like :meth:`validate` except that does not raise an exception but returns
         ``True`` if the XML data instance is valid, ``False`` if it is invalid.
         """
-        error = next(self.iter_errors(source, path, schema_path, use_defaults,
-                                      namespaces, max_depth, extra_validator), None)
+        error = next(self.iter_errors(source, path, schema_path, use_defaults, namespaces,
+                                      max_depth, extra_validator, allow_empty), None)
         return error is None
 
     def iter_errors(self, source: Union[XMLSourceType, XMLResource],
@@ -1736,7 +1725,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     use_defaults: bool = True,
                     namespaces: Optional[NamespacesType] = None,
                     max_depth: Optional[int] = None,
-                    extra_validator: Optional[ExtraValidatorType] = None) \
+                    extra_validator: Optional[ExtraValidatorType] = None,
+                    allow_empty: bool = True) \
             -> Iterator[XMLSchemaValidationError]:
         """
         Creates an iterator for the errors generated by the validation of an XML data against
@@ -1784,9 +1774,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         else:
             selector = resource.iter_depth(mode=3, nsmap=namespaces, ancestors=ancestors)
 
+        elem: Optional[Element] = None
         for elem in selector:
             if elem is resource.root:
-                xsd_element = schema.get_element(elem.tag, namespaces=namespaces)
                 if resource.lazy_depth:
                     kwargs['level'] = 0
                     kwargs['identities'] = {}
@@ -1809,8 +1799,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
                     prev_ancestors = ancestors[:]
 
-                xsd_element = schema.get_element(elem.tag, schema_path, namespaces)
-
+            xsd_element = schema.get_element(elem.tag, schema_path, namespaces)
             if xsd_element is None:
                 if XSI_TYPE in elem.attrib:
                     xsd_element = self.create_element(name=elem.tag)
@@ -1826,6 +1815,12 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     yield result
                 else:
                     del result
+        else:
+            if elem is None and not allow_empty:
+                assert path is not None
+                reason = _("the provided path selects nothing to validate")
+                yield schema.validation_error('lax', reason, None, resource, namespaces)
+                return
 
         if kwargs['identities'] is not identities:
             identity: XsdIdentity

@@ -24,8 +24,7 @@ from xml.etree.ElementTree import Element
 import xmlschema
 from xmlschema import XMLSchemaParseError, XMLSchemaIncludeWarning, XMLSchemaImportWarning
 from xmlschema.names import XML_NAMESPACE, LOCATION_HINTS, SCHEMAS_DIR, XSD_ELEMENT, XSI_TYPE
-from xmlschema.validators import XMLSchemaBase, XMLSchema10, XMLSchema11, \
-    XsdGlobals, Xsd11Attribute
+from xmlschema.validators import XMLSchemaBase, XMLSchema10, XMLSchema11, XsdGlobals
 from xmlschema.testing import SKIP_REMOTE_TESTS, XsdValidatorTestCase
 from xmlschema.validators.schemas import logger
 
@@ -832,24 +831,19 @@ class TestXMLSchema10(XsdValidatorTestCase):
             pickle.dumps(schema)
         self.assertIn("Can't pickle", str(ec.exception))
 
-    def test_old_subclassing_attribute(self):
+    def test_deprecated_check_schema_method(self):
 
         with warnings.catch_warnings(record=True) as ctx:
             warnings.simplefilter("always")
 
-            class OldXMLSchema10(XMLSchema10):
-                BUILDERS = {
-                    'attribute_class': Xsd11Attribute,
-                }
+            self.schema_class.check_schema(self.vh_schema)
 
             self.assertEqual(len(ctx), 1, "Expected one import warning")
-            self.assertIn("'BUILDERS' will be removed in v2.0", str(ctx[0].message))
+            self.assertIn("check_schema() class method will be removed in v3.0",
+                          str(ctx[0].message))
 
-        self.assertIs(OldXMLSchema10.xsd_attribute_class, Xsd11Attribute)
-
-        name = OldXMLSchema10.meta_schema.__class__.__name__
-        self.assertEqual(name, 'MetaXMLSchema10')
-        self.assertNotIn(name, globals())
+        with self.assertRaises(RuntimeError):
+            self.schema_class.meta_schema.check_schema(self.vh_schema)
 
     def test_default_namespace_mapping__issue_266(self):
         schema_file = self.casepath('issues/issue_266/issue_266b-1.xsd')
