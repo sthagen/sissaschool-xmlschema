@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Dict
 
 from xmlschema import XMLSchema10, XMLSchema11, fetch_namespaces, etree_tostring, \
-    XMLSchemaValidationError, DataElement, DataElementConverter, XMLResource
+    XMLSchemaValidationError, DataElement, DataElementConverter, XMLResource, \
+    XsdElement, XsdAttribute, XsdType
 
+from xmlschema.validators import XsdAttributeGroup
 from xmlschema.helpers import is_etree_element
 from xmlschema.names import XSI_TYPE
 from xmlschema.dataobjects import DataBindingMeta, DataBindingConverter
@@ -45,10 +47,11 @@ class TestDataElementInterface(unittest.TestCase):
         self.assertIsNone(data_element.get('a'))
         self.assertEqual(data_element.get('b'), 9)
 
-    def test_namespaces(self):
+    def test_nsmap(self):
         self.assertEqual(DataElement('foo').nsmap, {})
         nsmap = {'tns': 'http://xmlschema.test/ns'}
         self.assertEqual(DataElement('foo', nsmap=nsmap).nsmap, nsmap)
+        self.assertIsNot(DataElement('foo', nsmap=nsmap).nsmap, nsmap)
 
     def test_attributes_with_namespaces(self):
         nsmap = {'tns': 'http://xmlschema.test/ns'}
@@ -265,12 +268,72 @@ class TestDataObjects(unittest.TestCase):
         self.assertIsInstance(etree_tostring(obj), str)
         self.assertIsNone(etree_elements_assert_equal(obj, root, strict=False))
 
+    def test_collapsed_namespace_map(self):
+        col_data = self.col_schema.decode(self.col_xml_filename)
+
+        namespaces = col_data.get_namespaces()
+        self.assertDictEqual(
+            namespaces,
+            {'col': 'http://example.com/ns/collection',
+             'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
+        namespaces = col_data.get_namespaces({'': 'http://xmlschema.test/ns'})
+        self.assertDictEqual(
+            namespaces,
+            {'': 'http://xmlschema.test/ns',
+             'col': 'http://example.com/ns/collection',
+             'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
+        namespaces = col_data.get_namespaces({'tns': 'http://xmlschema.test/ns'})
+        self.assertDictEqual(
+            namespaces,
+            {'tns': 'http://xmlschema.test/ns',
+             'col': 'http://example.com/ns/collection',
+             'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
+        namespaces = col_data.get_namespaces({'xsi': 'http://xmlschema.test/ns'})
+        self.assertDictEqual(
+            namespaces,
+            {'xsi': 'http://xmlschema.test/ns',
+             'col': 'http://example.com/ns/collection',
+             'xsi0': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
+        xsd_filename = self.casepath('examples/collection/collection5.xsd')
+        col_schema = self.schema_class(xsd_filename, converter=self.converter)
+        xml_filename = self.casepath('examples/collection/collection-default.xml')
+        col_data = col_schema.decode(xml_filename)
+
+        namespaces = col_data.get_namespaces()
+        self.assertDictEqual(
+            namespaces,
+            {'': 'http://example.com/ns/collection',
+             'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
+        namespaces = col_data.get_namespaces({'': 'http://xmlschema.test/ns'})
+        self.assertDictEqual(
+            namespaces,
+            {'': 'http://xmlschema.test/ns',
+             'default': 'http://example.com/ns/collection',
+             'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+        )
+
     def test_serialize_to_xml_source(self):
         col_data = self.col_schema.decode(self.col_xml_filename)
 
-        xml_source = col_data.tostring()
-        self.assertTrue(xml_source.startswith('<col:collection '))
-        self.assertTrue(xml_source.endswith('</col:collection>'))
+        with Path(self.col_xml_filename).open() as fp:
+            _ = fp.read()
+
+        result = col_data.tostring()
+        self.assertTrue(result.startswith('<col:collection '))
+        self.assertTrue(result.endswith('</col:collection>'))
+
+        result = col_data.tostring(xml_declaration=True)
+        self.assertTrue(self.col_schema.is_valid(result))
 
     def test_validation(self):
         with self.assertRaises(ValueError) as ec:
@@ -432,6 +495,21 @@ class TestDataObjects(unittest.TestCase):
         self.assertEqual(data_element[0][0].get(XSI_TYPE), 'p:ConcreteContainterItemInfo')
         self.assertEqual(data_element[0][0].get('b:type'), 'p:ConcreteContainterItemInfo')
         self.assertIsNone(data_element[0][0].get('xsi:type'))
+
+    def test_xsd_attribute_access__issue_331(self):
+        col_data = self.col_schema.decode(self.col_xml_filename)
+        self.assertIsInstance(col_data[0].xsd_element, XsdElement)
+        self.assertEqual(col_data[0].xsd_element.name, 'object')
+        self.assertIsInstance(
+            col_data[0].xsd_element.attributes, XsdAttributeGroup
+        )
+        xsd_attribute = col_data[0].xsd_element.attributes.get('id')
+        self.assertIsInstance(xsd_attribute, XsdAttribute)
+
+        xsd_attribute = col_data[0].xsd_element.find('@id')
+        self.assertIsInstance(xsd_attribute, XsdAttribute)
+        self.assertIsInstance(xsd_attribute.type, XsdType)
+        self.assertIsNone(col_data[0].xsd_element.find('@unknown'))
 
 
 class TestDataBindings(TestDataObjects):

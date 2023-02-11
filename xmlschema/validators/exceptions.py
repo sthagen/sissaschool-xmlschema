@@ -15,7 +15,7 @@ from ..aliases import ElementType, NamespacesType, SchemaElementType, ModelParti
 from ..helpers import get_prefixed_qname, etree_getpath, is_etree_element
 from ..translation import gettext as _
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from ..resources import XMLResource
     from .xsdbase import XsdValidator
     from .groups import XsdGroup
@@ -240,7 +240,7 @@ class XMLSchemaValidationError(XMLSchemaValidatorError, ValueError):
             msg.append('Reason: %s\n' % self.reason)
 
         if hasattr(self.validator, 'tostring'):
-            chunk = self.validator.tostring('  ', 20)  # type: ignore[union-attr]
+            chunk = self.validator.tostring('  ', 20)
             msg.append("Schema:\n\n%s\n" % chunk)
 
         if self.elem is not None and is_etree_element(self.elem):

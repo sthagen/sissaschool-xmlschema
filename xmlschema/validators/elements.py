@@ -37,7 +37,8 @@ from ..xpath import XsdSchemaProtocol, XsdElementProtocol, XMLSchemaProxy, \
     ElementPathMixin, XPathElement
 from ..resources import XMLResource
 
-from .exceptions import XMLSchemaValidationError, XMLSchemaTypeTableWarning
+from .exceptions import XMLSchemaNotBuiltError, XMLSchemaValidationError, \
+    XMLSchemaTypeTableWarning
 from .helpers import get_xsd_derivation_attribute
 from .xsdbase import XSD_TYPE_DERIVATIONS, XSD_ELEMENT_DERIVATIONS, \
     XsdComponent, ValidationMixin
@@ -48,7 +49,7 @@ from .simple_types import XsdSimpleType
 from .attributes import XsdAttribute
 from .wildcards import XsdAnyElement
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from .attributes import XsdAttributeGroup
     from .groups import XsdGroup
 
@@ -472,15 +473,6 @@ class XsdElement(XsdComponent, ParticleMixin,
                                 dataobjects.DataBindingMeta(class_name, bases, attrs))
         return self.binding
 
-    def get_attribute(self, name: str) -> Optional[XsdAttribute]:
-        if name[0] != '{':
-            name = get_qname(self.type.target_namespace, name)
-        if not isinstance(self.type, XsdSimpleType):
-            xsd_attribute = self.type.attributes[name]
-            assert isinstance(xsd_attribute, XsdAttribute)
-            return xsd_attribute
-        return None
-
     def get_type(self, elem: Union[ElementType, ElementData],
                  inherited: Optional[Dict[str, Any]] = None) -> BaseXsdType:
         return self._head_type or self.type
@@ -675,8 +667,13 @@ class XsdElement(XsdComponent, ParticleMixin,
                 if self.identities:
                     xpath_element = XPathElement(self.name, xsd_type)
                     for identity in self.identities.values():
-                        if isinstance(identity.elements, tuple):
-                            continue  # Skip unbuilt identities
+                        if isinstance(identity.elements, tuple) \
+                                or identity.selector is None:
+                            continue  # Skip unbuilt or incomplete identities
+                        elif identity.selector.token is None:
+                            raise XMLSchemaNotBuiltError(
+                                identity, "identity selector is not built"
+                            )
 
                         context = XPathContext(
                             root=self.schema.xpath_node,
