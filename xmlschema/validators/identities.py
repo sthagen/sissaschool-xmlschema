@@ -26,7 +26,7 @@ from .exceptions import XMLSchemaNotBuiltError
 from .xsdbase import XsdComponent
 from .attributes import XsdAttribute
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from .elements import XsdElement
 
 IdentityFieldItemType = Union[AtomicValueType, XsdAttribute, Tuple[Any, ...], None]
@@ -124,7 +124,6 @@ class XsdSelector(XsdComponent):
 
     @property
     def target_namespace(self) -> str:
-        # TODO: implement a property in elementpath for getting XPath token's namespace
         if self.token is None:
             pass  # xpathDefaultNamespace="##targetNamespace"
         elif self.token.symbol == ':':
