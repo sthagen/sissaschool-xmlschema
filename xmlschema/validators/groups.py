@@ -13,8 +13,8 @@ This module contains classes for XML Schema model groups.
 import warnings
 from collections.abc import MutableMapping
 from copy import copy as _copy
-from typing import TYPE_CHECKING, overload, Any, Iterable, Iterator, List, \
-    MutableSequence, Optional, Tuple, Union
+from typing import TYPE_CHECKING, cast, overload, Any, Iterable, Iterator, \
+    List, MutableSequence, Optional, Tuple, Union
 from xml.etree import ElementTree
 
 from .. import limits
@@ -196,13 +196,27 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
     def effective_min_occurs(self) -> int:
         if not self.min_occurs or not self:
             return 0
+
+        effective_items: List[Any]
+        min_occurs: int
+        effective_items = [e for e in self.iter_model() if e.effective_max_occurs != 0]
+        if not effective_items:
+            return 0
         elif self.model == 'choice':
-            if any(not e.effective_min_occurs for e in self.iter_model()):
-                return 0
-        else:
-            if all(not e.effective_min_occurs for e in self.iter_model()):
-                return 0
-        return self.min_occurs
+            min_occurs = min(e.effective_min_occurs for e in effective_items)
+            return self.min_occurs * min_occurs
+        elif self.model == 'all':
+            min_occurs = max(e.effective_min_occurs for e in effective_items)
+            return min_occurs
+
+        not_emptiable_items = [e for e in effective_items if e.effective_min_occurs]
+        if not not_emptiable_items:
+            return 0
+        elif len(not_emptiable_items) > 1:
+            return self.min_occurs
+
+        min_occurs = not_emptiable_items[0].effective_min_occurs
+        return self.min_occurs * min_occurs
 
     @property
     def effective_max_occurs(self) -> Optional[int]:
@@ -210,35 +224,41 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
             return 0
 
         effective_items: List[Any]
-        value: int
+        max_occurs: int
 
-        effective_items = [e for e in self.iter_model() if e.effective_max_occurs != 0]
+        model_items = [(e, e.effective_max_occurs) for e in self.iter_model()]
+        effective_items = [x for x in model_items if x[1] != 0]
         if not effective_items:
             return 0
         elif self.max_occurs is None:
             return None
         elif self.model == 'choice':
-            try:
-                value = max(e.effective_max_occurs for e in effective_items)
-            except TypeError:
+            if any(x[1] is None for x in effective_items):
                 return None
             else:
-                return self.max_occurs * value
+                max_occurs = max(x[1] for x in effective_items)
+                return self.max_occurs * max_occurs
 
-        not_emptiable_items = [e for e in effective_items if e.effective_min_occurs]
+        not_emptiable_items = [x for x in effective_items if x[0].effective_min_occurs]
         if not not_emptiable_items:
-            try:
-                value = max(e.effective_max_occurs for e in effective_items)
-            except TypeError:
+            if any(x[1] is None for x in effective_items):
                 return None
             else:
-                return self.max_occurs * value
+                max_occurs = max(x[1] for x in effective_items)
+                return self.max_occurs * max_occurs
 
         elif len(not_emptiable_items) > 1:
-            return self.max_occurs
-
-        value = not_emptiable_items[0].effective_max_occurs
-        return None if value is None else self.max_occurs * value
+            if self.model == 'sequence':
+                return self.max_occurs
+            elif all(x[1] is None for x in not_emptiable_items):
+                return None
+            else:
+                max_occurs = min(x[1] for x in not_emptiable_items if x[1] is not None)
+                return max_occurs
+        elif not_emptiable_items[0][1] is None:
+            return None
+        else:
+            return self.max_occurs * cast(int, not_emptiable_items[0][1])
 
     def has_occurs_restriction(
             self, other: Union[ModelParticleType, ParticleMixin, 'OccursCalculator']) -> bool:
@@ -1280,6 +1300,26 @@ class Xsd11Group(XsdGroup):
         else:  # other.model == 'choice':
             return self.is_choice_restriction(other)
 
+    def has_occurs_restriction(
+            self, other: Union[ModelParticleType, ParticleMixin, 'OccursCalculator']) -> bool:
+        if not isinstance(other, XsdGroup):
+            return super().has_occurs_restriction(other)
+        elif not self:
+            return True
+        elif self.effective_min_occurs < other.effective_min_occurs:
+            return False
+
+        effective_max_occurs = self.effective_max_occurs
+        if effective_max_occurs == 0:
+            return True
+        elif effective_max_occurs is None:
+            return other.effective_max_occurs is None
+
+        try:
+            return effective_max_occurs <= other.effective_max_occurs  # type: ignore[operator]
+        except TypeError:
+            return True
+
     def is_sequence_restriction(self, other: XsdGroup) -> bool:
         if not self.has_occurs_restriction(other):
             return False
@@ -1306,12 +1346,22 @@ class Xsd11Group(XsdGroup):
             if item is not None and item.is_restriction(other_item, check_occurs):
                 item = next(item_iterator, None)
             elif not other_item.is_emptiable():
+                break
+        else:
+            if item is None:
+                return True
+
+        # Restriction check failed again: try checking other items against self
+        other_items = other.iter_model()
+        for other_item in other_items:
+            if self.is_restriction(other_item, check_occurs):
+                return all(x.is_emptiable() for x in other_items)
+            elif not other_item.is_emptiable():
                 return False
-        return item is None
+        else:
+            return False
 
     def is_all_restriction(self, other: XsdGroup) -> bool:
-        if not self.has_occurs_restriction(other):
-            return False
         restriction_items = [x for x in self.iter_model()]
 
         base_items = [x for x in other.iter_model()]
