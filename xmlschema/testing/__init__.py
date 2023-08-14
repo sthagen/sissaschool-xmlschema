@@ -32,7 +32,7 @@ from ._observers import SchemaObserver, ObservedXMLSchema10, ObservedXMLSchema11
 def has_network_access(*locations):
     for url in locations:
         try:
-            urlopen(url, timeout=5)
+            urlopen(url, timeout=10)
         except (URLError, OSError):
             pass
         else:
@@ -40,9 +40,7 @@ def has_network_access(*locations):
     return False
 
 
-SKIP_REMOTE_TESTS = not has_network_access(
-    'https://github.com/', 'https://www.w3.org/', 'https://www.sissa.it/'
-)
+SKIP_REMOTE_TESTS = not has_network_access('https://github.com/')
 
 
 __all__ = [

@@ -41,7 +41,7 @@ from xmlschema.testing import SKIP_REMOTE_TESTS
 
 TEST_CASES_DIR = str(pathlib.Path(__file__).absolute().parent.joinpath('test_cases'))
 
-DRIVE_REGEX = '/[a-zA-Z]:' if platform.system() == 'Windows' else ''
+DRIVE_REGEX = '(/[a-zA-Z]:|/)' if platform.system() == 'Windows' else ''
 
 XML_WITH_NAMESPACES = '<pfa:root xmlns:pfa="http://xmlschema.test/nsa">\n' \
                       '  <pfb:elem xmlns:pfb="http://xmlschema.test/nsb"/>\n' \
@@ -407,7 +407,7 @@ class TestResources(unittest.TestCase):
     def test_fetch_resource_function(self):
         with self.assertRaises(ValueError) as ctx:
             fetch_resource('')
-        self.assertIn('argument should contain a not empty string', str(ctx.exception))
+        self.assertIn('argument must contain a not empty string', str(ctx.exception))
 
         wrong_path = casepath('resources/dummy_file.txt')
         self.assertRaises(XMLResourceError, fetch_resource, wrong_path)
@@ -1339,7 +1339,7 @@ class TestResources(unittest.TestCase):
         resource = XMLResource('<root/>')
         with self.assertRaises(ValueError) as ctx:
             resource.get_namespaces(namespaces={'xml': "http://example.com/ne"})
-        self.assertIn("reserved prefix (xml)", str(ctx.exception))
+        self.assertIn("reserved prefix 'xml'", str(ctx.exception))
 
     def test_xml_resource_get_locations(self):
         resource = XMLResource(self.col_xml_file)

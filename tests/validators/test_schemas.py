@@ -9,6 +9,7 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 import unittest
+import filecmp
 import logging
 import tempfile
 import warnings
@@ -806,6 +807,36 @@ class TestXMLSchema10(XsdValidatorTestCase):
 
         self.assertFalse(os.path.isdir(dirname))
 
+    @unittest.skipIf(platform.system() == 'Windows', 'skip, Windows systems save with <CR><LF>')
+    def test_export_other_encoding(self):
+        schema_file = self.casepath('examples/menù/menù.xsd')
+        schema_ascii_file = self.casepath('examples/menù/menù-ascii.xsd')
+        schema_cp1252_file = self.casepath('examples/menù/menù-cp1252.xsd')
+
+        schema = self.schema_class(schema_file)
+        with tempfile.TemporaryDirectory() as dirname:
+            schema.export(target=dirname)
+            exported_schema = pathlib.Path(dirname).joinpath('menù.xsd')
+            self.assertTrue(filecmp.cmp(schema_file, exported_schema))
+            self.assertFalse(filecmp.cmp(schema_ascii_file, exported_schema))
+            self.assertFalse(filecmp.cmp(schema_cp1252_file, exported_schema))
+
+        schema = self.schema_class(schema_ascii_file)
+        with tempfile.TemporaryDirectory() as dirname:
+            schema.export(target=dirname)
+            exported_schema = pathlib.Path(dirname).joinpath('menù-ascii.xsd')
+            self.assertFalse(filecmp.cmp(schema_file, exported_schema))
+            self.assertTrue(filecmp.cmp(schema_ascii_file, exported_schema))
+            self.assertFalse(filecmp.cmp(schema_cp1252_file, exported_schema))
+
+        schema = self.schema_class(schema_cp1252_file)
+        with tempfile.TemporaryDirectory() as dirname:
+            schema.export(target=dirname)
+            exported_schema = pathlib.Path(dirname).joinpath('menù-cp1252.xsd')
+            self.assertFalse(filecmp.cmp(schema_file, exported_schema))
+            self.assertFalse(filecmp.cmp(schema_ascii_file, exported_schema))
+            self.assertTrue(filecmp.cmp(schema_cp1252_file, exported_schema))
+
     def test_pickling_subclassed_schema__issue_263(self):
         cases_dir = pathlib.Path(__file__).parent.parent
         schema_file = cases_dir.joinpath('test_cases/examples/vehicles/vehicles.xsd')
@@ -853,6 +884,24 @@ class TestXMLSchema10(XsdValidatorTestCase):
         error_message = str(ec.exception)
         self.assertIn("the QName 'testAttribute3' is mapped to no namespace", error_message)
         self.assertIn("requires that there is an xs:import statement", error_message)
+
+    @unittest.skipIf(SKIP_REMOTE_TESTS, "Remote networks are not accessible.")
+    def test_import_dsig_namespace__issue_357(self):
+        location = 'https://www.w3.org/TR/2008/REC-xmldsig-core-20080610/xmldsig-core-schema.xsd'
+        dsig_namespace = 'http://www.w3.org/2000/09/xmldsig#'
+
+        schema = self.schema_class(dedent(f"""<?xml version="1.0" encoding="UTF-8"?>
+            <!-- Test import of defused data from remote with a fallback.-->
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:import namespace="{dsig_namespace}"
+                    schemaLocation="{location}"/>
+                <xs:element name="root"/>
+            </xs:schema>"""))
+
+        self.assertIn(dsig_namespace, schema.maps.namespaces)
+        url = schema.maps.namespaces[dsig_namespace][0].url
+        self.assertIsInstance(url, str)
+        self.assertTrue(url.endswith('schemas/DSIG/xmldsig-core-schema.xsd'))
 
 
 class TestXMLSchema11(TestXMLSchema10):

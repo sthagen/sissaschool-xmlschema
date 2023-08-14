@@ -26,6 +26,7 @@ from itertools import chain
 from operator import attrgetter
 from typing import cast, Callable, ItemsView, List, Optional, Dict, Any, \
     Set, Union, Tuple, Type, Iterator, Counter
+from urllib.parse import unquote
 from xml.etree.ElementTree import Element, ParseError
 
 from elementpath import XPathToken, SchemaElementNode, build_schema_node_tree
@@ -45,7 +46,7 @@ from ..aliases import ElementType, XMLSourceType, NamespacesType, LocationsType,
     EncodeType, BaseXsdType, ExtraValidatorType, SchemaGlobalType, \
     FillerType, DepthFillerType, ValueHookType, ElementHookType
 from ..translation import gettext as _
-from ..helpers import prune_etree, get_namespace, get_qname
+from ..helpers import prune_etree, get_namespace, get_qname, is_defuse_error
 from ..namespaces import NamespaceResourcesMap, NamespaceView
 from ..resources import is_local_url, is_remote_url, url_path_is_file, \
     normalize_locations, fetch_resource, normalize_url, XMLResource
@@ -1312,7 +1313,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             self._import_namespace(namespace, locations)
 
     def _import_namespace(self, namespace: str, locations: List[str]) -> None:
-        import_error = None
+        import_error: Optional[Exception] = None
         for url in locations:
             try:
                 logger.debug("Import namespace %r from %r", namespace, url)
@@ -1324,14 +1325,20 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 if import_error is None:
                     import_error = err
             except (XMLSchemaParseError, XMLSchemaTypeError, ParseError) as err:
-                if namespace:
-                    msg = _("cannot import namespace {0!r}: {1}").format(namespace, err)
+                if is_defuse_error(err):
+                    # Consider defuse of XML data as a location access fail
+                    logger.debug('%s', err)
+                    if import_error is None:
+                        import_error = err
                 else:
-                    msg = _("cannot import chameleon schema: %s") % err
-                if isinstance(err, (XMLSchemaParseError, ParseError)):
-                    self.parse_error(msg)
-                else:
-                    raise type(err)(msg)
+                    if namespace:
+                        msg = _("cannot import namespace {0!r}: {1}").format(namespace, err)
+                    else:
+                        msg = _("cannot import chameleon schema: %s") % err
+                    if isinstance(err, (XMLSchemaParseError, ParseError)):
+                        self.parse_error(msg)
+                    else:
+                        raise type(err)(msg)
 
             except XMLSchemaValueError as err:
                 self.parse_error(err)
@@ -1451,7 +1458,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             raise XMLSchemaValueError(msg.format(target_path.parent))
 
         url = self.url or 'schema.xsd'
-        basename = pathlib.Path(urlsplit(url).path).name
+        basename = pathlib.Path(unquote(urlsplit(url).path)).name
         exports: Any = {self: [target_path.joinpath(basename), self.get_text()]}
         path: Any
 
@@ -1510,7 +1517,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                                 except ValueError:
                                     break
 
-                    path = target_path.joinpath(path)
+                    path = target_path.joinpath(unquote(str(path)))
                     repl = 'schemaLocation="{}"'.format(path.as_posix())
                     schema_text = exports[schema][1]
                     pattern = r'\bschemaLocation\s*=\s*[\'\"].*%s.*[\'"]' % re.escape(location)
@@ -1524,7 +1531,16 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             if not path.parent.exists():
                 path.parent.mkdir(parents=True)
 
-            with path.open(mode='w') as fp:
+            encoding = 'utf-8'  # default encoding for XML 1.0
+
+            if text.startswith('<?'):
+                # Get the encoding from XML declaration
+                xml_declaration = text.split('\n', maxsplit=1)[0]
+                re_match = re.search('(?<=encoding=["\'])[^"\']+', xml_declaration)
+                if re_match is not None:
+                    encoding = re_match.group(0).lower()
+
+            with path.open(mode='w', encoding=encoding) as fp:
                 fp.write(text)
 
     def version_check(self, elem: ElementType) -> bool:
