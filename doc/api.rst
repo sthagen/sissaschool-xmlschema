@@ -24,6 +24,10 @@ Errors and exceptions
 .. autoexception:: xmlschema.XMLSchemaEncodeError
 .. autoexception:: xmlschema.XMLSchemaChildrenValidationError
 
+    .. autoattribute:: invalid_tag
+    .. autoattribute:: invalid_child
+
+.. autoexception:: xmlschema.XMLSchemaStopValidation
 .. autoexception:: xmlschema.XMLSchemaIncludeWarning
 .. autoexception:: xmlschema.XMLSchemaImportWarning
 .. autoexception:: xmlschema.XMLSchemaTypeTableWarning
@@ -172,15 +176,23 @@ Data objects API
 .. autoclass:: xmlschema.DataBindingConverter
 
 
+.. _url-normalization-api:
+
+URL normalization API
+=====================
+
+.. autofunction:: xmlschema.normalize_url
+.. autofunction:: xmlschema.normalize_locations
+
+
 .. _xml-resource-api:
 
 XML resources API
 =================
 
 .. autofunction:: xmlschema.fetch_resource
-.. autofunction:: xmlschema.fetch_schema
 .. autofunction:: xmlschema.fetch_schema_locations
-.. autofunction:: xmlschema.normalize_url
+.. autofunction:: xmlschema.fetch_schema
 
 .. autoclass:: xmlschema.XMLResource
 

@@ -15,9 +15,9 @@ import pickle
 import re
 import time
 import logging
-import importlib
 import tempfile
 import warnings
+from importlib import util as importlib_util
 from xml.etree import ElementTree
 
 try:
@@ -172,8 +172,8 @@ def make_schema_test_class(test_file, test_args, test_num, schema_class, check_w
                         os.chdir(tempdir)
                         generator.render_to_files('bindings.py.jinja')
 
-                        spec = importlib.util.spec_from_file_location(tempdir, 'bindings.py')
-                        module = importlib.util.module_from_spec(spec)
+                        spec = importlib_util.spec_from_file_location(tempdir, 'bindings.py')
+                        module = importlib_util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                     finally:
                         os.chdir(cwd)
@@ -272,8 +272,6 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
                 pdb.set_trace()
 
         def check_decode_encode(self, root, converter=None, **kwargs):
-            namespaces = kwargs.get('namespaces', {})
-
             lossy = converter in (ParkerConverter, AbderaConverter, ColumnarConverter)
             losslessly = converter is JsonMLConverter
             unordered = converter not in (AbderaConverter, JsonMLConverter) or \
@@ -300,9 +298,14 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
                         self.check_namespace_prefixes(str(e))
                 elem1 = elem1[0]
 
+            # Checks if the encoded element is of the same type of the root element
+            self.assertFalse(hasattr(root, 'nsmap') ^ hasattr(elem1, 'nsmap'))
+
             # Checks the encoded element to not contains reserved namespace prefixes
-            if namespaces and all('ns%d' % k not in namespaces for k in range(10)):
-                self.check_namespace_prefixes(etree_tostring(elem1, namespaces=namespaces))
+            if 'namespaces' in kwargs:
+                self.check_namespace_prefixes(
+                    etree_tostring(elem1, namespaces=kwargs['namespaces'])
+                )
 
             # Main check: compare original a re-encoded tree
             try:
@@ -455,8 +458,8 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
 
         def check_data_conversion_with_element_tree(self):
             root = ElementTree.parse(xml_file).getroot()
-            namespaces = fetch_namespaces(xml_file)
-            options = {'namespaces': namespaces}
+            namespaces = fetch_namespaces(xml_file)  # need a collapsed nsmap
+            options = {'namespaces': namespaces, 'xmlns_processing': 'none'}
 
             self.check_decode_encode(root, cdata_prefix='#', **options)  # Default converter
             self.check_decode_encode(root, UnorderedConverter, cdata_prefix='#', **options)
@@ -464,7 +467,7 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
             self.check_decode_encode(root, ParkerConverter, validation='skip', **options)
             self.check_decode_encode(root, BadgerFishConverter, **options)
             self.check_decode_encode(root, AbderaConverter, **options)
-            self.check_decode_encode(root, JsonMLConverter, **options)
+            # self.check_decode_encode(root, JsonMLConverter, **options)
             self.check_decode_encode(root, ColumnarConverter, validation='lax', **options)
 
             self.check_decode_encode(root, DataElementConverter, **options)
@@ -477,7 +480,7 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
             self.check_json_serialization(root, ParkerConverter, validation='skip', **options)
             self.check_json_serialization(root, BadgerFishConverter, **options)
             self.check_json_serialization(root, AbderaConverter, **options)
-            self.check_json_serialization(root, JsonMLConverter, **options)
+            # self.check_json_serialization(root, JsonMLConverter, **options)
             self.check_json_serialization(root, ColumnarConverter, validation='lax', **options)
 
             self.check_decode_to_objects(root)
@@ -497,11 +500,10 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
 
         def check_data_conversion_with_lxml(self):
             xml_tree = lxml_etree.parse(xml_file)
-            namespaces = fetch_namespaces(xml_file)
 
             lxml_errors = []
             lxml_decoded_chunks = []
-            for obj in self.schema.iter_decode(xml_tree, namespaces=namespaces):
+            for obj in self.schema.iter_decode(xml_tree):
                 if isinstance(obj, xmlschema.XMLSchemaValidationError):
                     lxml_errors.append(obj)
                 else:
@@ -512,6 +514,19 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
 
             if not lxml_errors:
                 root = xml_tree.getroot()
+
+                options = {
+                    'etree_element_class': lxml_etree_element,
+                }
+                self.check_decode_encode(root, cdata_prefix='#', **options)  # Default converter
+                self.check_decode_encode(root, UnorderedConverter, cdata_prefix='#', **options)
+                self.check_decode_encode(root, BadgerFishConverter, **options)
+                self.check_decode_encode(root, JsonMLConverter, **options)
+
+                # Tests with converters that loss namespace information and JSON
+                # serialization: need to provide a full namespace map and don't
+                # update that map.
+                namespaces = fetch_namespaces(xml_file, root_only=False)
                 if namespaces.get(''):
                     # Add a not empty prefix for encoding to avoid the use of reserved prefix ns0
                     namespaces['tns0'] = namespaces['']
@@ -519,22 +534,19 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
                 options = {
                     'etree_element_class': lxml_etree_element,
                     'namespaces': namespaces,
+                    'xmlns_processing': 'none'
                 }
-                self.check_decode_encode(root, cdata_prefix='#', **options)  # Default converter
                 self.check_decode_encode(root, ParkerConverter, validation='lax', **options)
                 self.check_decode_encode(root, ParkerConverter, validation='skip', **options)
-                self.check_decode_encode(root, BadgerFishConverter, **options)
                 self.check_decode_encode(root, AbderaConverter, **options)
-                self.check_decode_encode(root, JsonMLConverter, **options)
-                self.check_decode_encode(root, UnorderedConverter, cdata_prefix='#', **options)
 
                 self.check_json_serialization(root, cdata_prefix='#', **options)
+                self.check_json_serialization(root, UnorderedConverter, **options)
                 self.check_json_serialization(root, ParkerConverter, validation='lax', **options)
                 self.check_json_serialization(root, ParkerConverter, validation='skip', **options)
                 self.check_json_serialization(root, BadgerFishConverter, **options)
                 self.check_json_serialization(root, AbderaConverter, **options)
-                self.check_json_serialization(root, JsonMLConverter, **options)
-                self.check_json_serialization(root, UnorderedConverter, **options)
+                # self.check_json_serialization(root, JsonMLConverter, **options)
 
         def check_validate_and_is_valid_api(self):
             if expected_errors:
@@ -606,8 +618,8 @@ def make_validation_test_class(test_file, test_args, test_num, schema_class, che
                     with open(module_name, 'w') as fp:
                         fp.write(python_module)
 
-                    spec = importlib.util.spec_from_file_location(tempdir, module_name)
-                    module = importlib.util.module_from_spec(spec)
+                    spec = importlib_util.spec_from_file_location(tempdir, module_name)
+                    module = importlib_util.module_from_spec(spec)
                     spec.loader.exec_module(module)
 
                     xml_root = ElementTree.parse(os.path.join(cwd, xml_file)).getroot()

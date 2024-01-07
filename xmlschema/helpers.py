@@ -10,16 +10,16 @@
 import re
 from collections import Counter
 from decimal import Decimal
-from typing import Any, Callable, Iterator, List, MutableMapping, \
-    Optional, Tuple, Union
+from typing import Any, Callable, Iterable, Iterator, List, MutableMapping, \
+    MutableSequence, Optional, Tuple, Union
 from xml.etree.ElementTree import ParseError
 
 from .exceptions import XMLSchemaValueError, XMLSchemaTypeError
-from .names import XSI_SCHEMA_LOCATION, XSI_NONS_SCHEMA_LOCATION
+from .names import XML_NAMESPACE, XSI_SCHEMA_LOCATION, XSI_NONS_SCHEMA_LOCATION
 from .aliases import ElementType, NamespacesType, AtomicValueType, NumericValueType
 
 ###
-# Helper functions for QNames
+# Helper functions for QNames and namespaces
 
 NAMESPACE_PATTERN = re.compile(r'{([^}]*)}')
 
@@ -143,6 +143,57 @@ def get_extended_qname(qname: str, namespaces: Optional[MutableMapping[str, str]
             return f'{{{uri}}}{name}' if uri else name
 
 
+def update_namespaces(namespaces: NamespacesType,
+                      xmlns: Iterable[Tuple[str, str]],
+                      root_declarations: bool = False) -> None:
+    """
+    Update a namespace map without overwriting existing declarations.
+    If a duplicate prefix is encountered in a xmlns declaration, and
+    this is mapped to a different namespace, adds the namespace using
+    a different generated prefix. The empty prefix '' is used only if
+    it's declared at root level to avoid erroneous mapping of local
+    names. In other cases it uses the prefix 'default' as substitute.
+
+    :param namespaces: the target namespace map.
+    :param xmlns: an iterable containing couples of namespace declarations.
+    :param root_declarations: provide `True` if the namespace declarations \
+    belong to the root element, `False` otherwise (default).
+    """
+    for prefix, uri in xmlns:
+        if not prefix:
+            if not uri:
+                continue
+            elif '' not in namespaces:
+                if root_declarations:
+                    namespaces[''] = uri
+                    continue
+            elif namespaces[''] == uri:
+                continue
+            prefix = 'default'
+
+        while prefix in namespaces:
+            if namespaces[prefix] == uri:
+                break
+            match = re.search(r'(\d+)$', prefix)
+            if match:
+                index = int(match.group()) + 1
+                prefix = prefix[:match.span()[0]] + str(index)
+            else:
+                prefix += '0'
+        else:
+            namespaces[prefix] = uri
+
+
+def get_namespace_map(namespaces: Optional[NamespacesType]) -> NamespacesType:
+    """Returns a new and checked namespace map."""
+    namespaces = {k: v for k, v in namespaces.items()} if namespaces else {}
+    if namespaces.get('xml', XML_NAMESPACE) != XML_NAMESPACE:
+        msg = f"reserved prefix 'xml' can be used only for {XML_NAMESPACE!r} namespace"
+        raise XMLSchemaValueError(msg)
+
+    return namespaces
+
+
 ###
 # Helper functions for ElementTree structures
 
@@ -248,6 +299,27 @@ def etree_iter_location_hints(elem: ElementType) -> Iterator[Tuple[Any, Any]]:
             yield '', url
 
 
+def etree_iter_namespaces(root: ElementType,
+                          elem: Optional[ElementType] = None) -> Iterator[str]:
+    """
+    Yields namespaces of an ElementTree structure. If an *elem* is
+    provided stops when found if during the iteration.
+    """
+    if root.tag != '{' and root is not elem:
+        yield ''
+
+    for e in root.iter():
+        if e is elem:
+            return
+        elif e.tag[0] == '{':
+            yield get_namespace(e.tag)
+
+        if e.attrib:
+            for name in e.attrib:
+                if name[0] == '{':
+                    yield get_namespace(name)
+
+
 def prune_etree(root: ElementType, selector: Callable[[ElementType], bool]) \
         -> Optional[bool]:
     """
@@ -337,3 +409,19 @@ def is_defuse_error(err: Exception) -> bool:
     return "Entities are forbidden" in msg or \
         "Unparsed entities are forbidden" in msg or \
         "External references are forbidden" in msg
+
+
+def iter_decoded_data(obj: Any, level: int = 0) \
+        -> Iterator[Tuple[Union[MutableMapping[Any, Any], MutableSequence[Any]], int]]:
+    """
+    Iterates a nested object composed by lists and dictionaries,
+    pairing with the level depth.
+    """
+    if isinstance(obj, MutableMapping):
+        yield obj, level
+        for value in obj.values():
+            yield from iter_decoded_data(value, level + 1)
+    elif isinstance(obj, MutableSequence):
+        yield obj, level
+        for item in obj:
+            yield from iter_decoded_data(item, level + 1)

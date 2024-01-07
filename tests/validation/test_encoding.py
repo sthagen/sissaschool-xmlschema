@@ -8,7 +8,6 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
-import sys
 import os
 import unittest
 from textwrap import dedent
@@ -319,12 +318,8 @@ class TestEncoding(XsdValidatorTestCase):
 
         self.assertTrue(message_lines, msg="Empty error message!")
         self.assertEqual(message_lines[-4], 'Instance:')
-        if sys.version_info < (3, 8):
-            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
-                   'pitch="0.0" roll="0.0" yaw="-1.0" />'
-        else:
-            text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
-                   'roll="0.0" pitch="0.0" yaw="-1.0" />'
+        text = '<tns:rotation xmlns:tns="http://www.example.org/Rotation/" ' \
+               'roll="0.0" pitch="0.0" yaw="-1.0" />'
         self.assertEqual(message_lines[-2].strip(), text)
 
         # With 'lax' validation a dummy resource is assigned to source attribute
@@ -497,7 +492,8 @@ class TestEncoding(XsdValidatorTestCase):
             </xs:schema>""")
 
         xml1 = """<a xmlns="http://xmlschema.test/ns">alpha</a>"""
-        self.assertEqual(schema.decode(xml1), 'alpha')
+        self.assertEqual(schema.decode(xml1),
+                         {'@xmlns': 'http://xmlschema.test/ns', '$': 'alpha'})
 
         xml2 = """<a xmlns="http://xmlschema.test/ns"
                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -640,6 +636,7 @@ class TestEncoding(XsdValidatorTestCase):
             etree_element_class=lxml_etree.Element,
         )
 
+        self.assertTrue(hasattr(elem, 'nsmap'))
         self.assertEqual(
             etree_tostring(elem, namespaces=self.col_namespaces),
             dedent(

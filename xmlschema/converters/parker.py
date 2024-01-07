@@ -11,6 +11,7 @@ from collections.abc import MutableMapping, MutableSequence
 from typing import TYPE_CHECKING, Any, Optional, List, Dict, Type
 
 from ..aliases import NamespacesType, BaseXsdType
+from ..resources import XMLResource
 from .default import ElementData, XMLSchemaConverter
 
 if TYPE_CHECKING:
@@ -43,14 +44,23 @@ class ParkerConverter(XMLSchemaConverter):
         )
 
     @property
+    def xmlns_processing_default(self) -> str:
+        return 'stacked' if isinstance(self.source, XMLResource) else 'none'
+
+    @property
     def lossy(self) -> bool:
+        return True
+
+    @property
+    def loss_xmlns(self) -> bool:
         return True
 
     def element_decode(self, data: ElementData, xsd_element: 'XsdElement',
                        xsd_type: Optional[BaseXsdType] = None, level: int = 0) -> Any:
         xsd_type = xsd_type or xsd_element.type
         preserve_root = self.preserve_root
-        if xsd_type.simple_type is not None:
+
+        if xsd_type.model_group is None or not data.content:
             if preserve_root:
                 return self.dict([(self.map_qname(data.tag), data.text)])
             else:
@@ -91,17 +101,17 @@ class ParkerConverter(XMLSchemaConverter):
             if obj == '':
                 obj = None
             if xsd_element.type.simple_type is not None:
-                return ElementData(xsd_element.name, obj, None, {})
+                return ElementData(xsd_element.name, obj, None, {}, None)
             else:
-                return ElementData(xsd_element.name, None, obj, {})
+                return ElementData(xsd_element.name, None, obj, {}, None)
         else:
             if not obj:
-                return ElementData(xsd_element.name, None, None, {})
+                return ElementData(xsd_element.name, None, None, {}, None)
             elif self.preserve_root:
                 try:
                     items = obj[self.map_qname(name)]
                 except KeyError:
-                    return ElementData(xsd_element.name, None, None, {})
+                    return ElementData(xsd_element.name, None, None, {}, None)
             else:
                 items = obj
 
@@ -132,6 +142,6 @@ class ParkerConverter(XMLSchemaConverter):
                             content.extend((ns_name, item) for item in value)
 
             except AttributeError:
-                return ElementData(xsd_element.name, items, None, {})
+                return ElementData(xsd_element.name, items, None, {}, None)
             else:
-                return ElementData(xsd_element.name, None, content, {})
+                return ElementData(xsd_element.name, None, content, {}, None)

@@ -16,7 +16,7 @@ from decimal import Decimal
 from types import GeneratorType
 from typing import TYPE_CHECKING, cast, Any, Dict, Iterator, List, Optional, \
     Set, Tuple, Type, Union
-from xml.etree.ElementTree import Element
+from xml.etree.ElementTree import Element, ParseError
 
 from elementpath import XPath2Parser, ElementPathError, XPathContext, XPathToken, \
     ElementNode, LazyElementNode, SchemaElementNode, build_schema_node_tree
@@ -30,8 +30,10 @@ from ..aliases import ElementType, SchemaType, BaseXsdType, SchemaElementType, \
     ModelParticleType, ComponentClassType, AtomicValueType, DecodeType, \
     IterDecodeType, IterEncodeType
 from ..translation import gettext as _
-from ..helpers import get_qname, get_namespace, etree_iter_location_hints, \
-    raw_xml_encode, strictly_equal
+from ..helpers import get_qname, etree_iter_location_hints, \
+    etree_iter_namespaces, raw_xml_encode, strictly_equal
+from ..namespaces import NamespaceMapper
+from ..locations import normalize_url
 from .. import dataobjects
 from ..converters import ElementData, XMLSchemaConverter
 from ..xpath import XsdSchemaProtocol, XsdElementProtocol, XMLSchemaProxy, \
@@ -39,10 +41,10 @@ from ..xpath import XsdSchemaProtocol, XsdElementProtocol, XMLSchemaProxy, \
 from ..resources import XMLResource
 
 from .exceptions import XMLSchemaNotBuiltError, XMLSchemaValidationError, \
-    XMLSchemaTypeTableWarning
+    XMLSchemaParseError, XMLSchemaStopValidation, XMLSchemaTypeTableWarning
 from .helpers import get_xsd_derivation_attribute
 from .xsdbase import XSD_TYPE_DERIVATIONS, XSD_ELEMENT_DERIVATIONS, \
-    XsdComponent, ValidationMixin
+    XSD_VALIDATION_MODES, XsdComponent, ValidationMixin
 from .particles import ParticleMixin, OccursCalculator
 from .identities import XsdIdentity, XsdKey, XsdUnique, \
     XsdKeyref, KeyrefCounter, IdentityCounterType
@@ -548,43 +550,39 @@ class XsdElement(XsdComponent, ParticleMixin,
                 return None
         return self.type.text_decode(text)
 
-    def check_dynamic_context(self, elem: ElementType, **kwargs: Any) -> None:
+    def check_dynamic_context(self, elem: ElementType,
+                              validation: str,
+                              options: Dict[str, Any]) -> Iterator[XMLSchemaValidationError]:
         try:
-            locations = kwargs['locations']
+            source: XMLResource = options['source']
         except KeyError:
             return
 
-        schema: Optional[SchemaType]
         for ns, url in etree_iter_location_hints(elem):
-            if ns not in locations:
-                locations[ns] = url
-            elif locations[ns] is None:
+            base_url = source.base_url
+            url = normalize_url(url, base_url)
+            if any(url == schema.url for schema in self.maps.iter_schemas()):
+                continue
+
+            if ns in etree_iter_namespaces(source.root, elem):
                 reason = _("schemaLocation declaration after namespace start")
-                raise XMLSchemaValidationError(self, elem, reason)
+                yield self.validation_error(validation, reason, elem, **options)
 
-            if ns == self.target_namespace:
-                schema = self.schema.include_schema(url, self.schema.base_url)
-            else:
-                schema = self.schema.import_schema(ns, url, self.schema.base_url)
+            try:
+                if ns in self.maps.namespaces:
+                    schema = self.maps.namespaces[ns][0]
+                    schema.include_schema(url)
+                    self.schema.clear()
+                    self.schema.build()
+                else:
+                    self.schema.import_schema(ns, url, base_url, build=True)
 
-            if schema is None:
-                reason = _("missing dynamic loaded schema from %s") % url
-                raise XMLSchemaValidationError(self, elem, reason)
-            elif not schema.built:
-                reason = _("dynamic loaded schema change the assessment")
-                raise XMLSchemaValidationError(self, elem, reason)
-
-        if elem.attrib:
-            for name in elem.attrib:
-                if name[0] == '{':
-                    ns = get_namespace(name)
-                    if ns not in locations:
-                        locations[ns] = None
-
-        if elem.tag[0] == '{':
-            ns = get_namespace(elem.tag)
-            if ns not in locations:
-                locations[ns] = None
+            except (XMLSchemaValidationError, ParseError) as err:
+                yield self.validation_error(validation, err, elem, **options)
+            except XMLSchemaParseError as err:
+                yield self.validation_error(validation, err.message, elem, **options)
+            except (OSError, IOError):
+                continue
 
     def iter_decode(self, obj: ElementType, validation: str = 'lax', **kwargs: Any) \
             -> IterDecodeType[Any]:
@@ -598,10 +596,20 @@ class XsdElement(XsdComponent, ParticleMixin,
         validation or decoding errors.
         """
         error: Union[XMLSchemaValueError, XMLSchemaValidationError]
+        result: Any
 
         if self.abstract:
             reason = _("cannot use an abstract element for validation")
             yield self.validation_error(validation, reason, obj, **kwargs)
+
+        # Control validation on element and its descendants or stop validation
+        if 'validation_hook' in kwargs:
+            value = kwargs['validation_hook'](obj, self)
+            if value:
+                if isinstance(value, str) and value in XSD_VALIDATION_MODES:
+                    validation = value
+                else:
+                    return
 
         try:
             level = kwargs['level']
@@ -622,15 +630,17 @@ class XsdElement(XsdComponent, ParticleMixin,
         try:
             converter = kwargs['converter']
         except KeyError:
-            converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
+            converter = self._get_converter(obj, kwargs)
         else:
-            if converter is not None and not isinstance(converter, XMLSchemaConverter):
-                converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
+            if not isinstance(converter, NamespaceMapper):
+                converter = self._get_converter(obj, kwargs)
 
-        try:
-            pass  # self.check_dynamic_context(elem, **kwargs) TODO: dynamic schema load
-        except XMLSchemaValidationError as err:
-            yield self.validation_error(validation, err, obj, **kwargs)
+        if not level:
+            # Need to set base context with the right object (the resource can be lazy)
+            converter.set_context(obj, level)
+        elif kwargs.get('use_location_hints'):
+            # Use location hints for dynamic schema load
+            yield from self.check_dynamic_context(obj, validation, options=kwargs)
 
         inherited = kwargs.get('inherited')
         value = content = attributes = None
@@ -641,11 +651,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         if XSI_TYPE in obj.attrib and self.schema.meta_schema is not None:
             # Meta-schema elements ignore xsi:type (issue #350)
             type_name = obj.attrib[XSI_TYPE].strip()
-            try:
-                namespaces = kwargs['namespaces']
-            except KeyError:
-                namespaces = None
-
+            namespaces = converter.namespaces
             try:
                 xsd_type = self.maps.get_instance_type(type_name, xsd_type, namespaces)
             except (KeyError, TypeError) as err:
@@ -690,7 +696,6 @@ class XsdElement(XsdComponent, ParticleMixin,
 
         # Decode attributes
         attribute_group = self.get_attributes(xsd_type)
-        result: Any
         for result in attribute_group.iter_decode(obj.attrib, validation, **kwargs):
             if isinstance(result, XMLSchemaValidationError):
                 yield self.validation_error(validation, result, obj, **kwargs)
@@ -767,7 +772,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     reason = _("must have the fixed value %r") % self.fixed
                     yield self.validation_error(validation, reason, obj, **kwargs)
 
-            elif not text and self.default is not None and kwargs.get('use_defaults'):
+            elif not text and self.default is not None and kwargs.get('use_defaults', True):
                 text = self.default
 
             if not isinstance(xsd_type, XsdSimpleType):
@@ -816,8 +821,10 @@ class XsdElement(XsdComponent, ParticleMixin,
                 if not kwargs.get('binary_types'):
                     value = str(value)
 
-        if converter is not None:
-            element_data = ElementData(obj.tag, value, content, attributes)
+        xmlns = converter.set_context(obj, level)  # Purge existing sub-contexts
+
+        if isinstance(converter, XMLSchemaConverter):
+            element_data = ElementData(obj.tag, value, content, attributes, xmlns)
             if 'element_hook' in kwargs:
                 element_data = kwargs['element_hook'](element_data, self, xsd_type)
 
@@ -826,7 +833,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             except (ValueError, TypeError) as err:
                 yield self.validation_error(validation, err, obj, **kwargs)
         elif not level:
-            yield ElementData(obj.tag, value, None, attributes)
+            yield ElementData(obj.tag, value, None, attributes, None)
 
         if content is not None:
             del content
@@ -959,10 +966,10 @@ class XsdElement(XsdComponent, ParticleMixin,
         try:
             converter = kwargs['converter']
         except KeyError:
-            converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
+            converter = self._get_converter(obj, kwargs)
         else:
             if not isinstance(converter, XMLSchemaConverter):
-                converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
+                converter = self._get_converter(obj, kwargs)
 
         try:
             level = kwargs['level']
@@ -974,15 +981,11 @@ class XsdElement(XsdComponent, ParticleMixin,
         except (ValueError, TypeError) as err:
             yield self.validation_error(validation, err, obj, **kwargs)
             return
-        else:
-            if not level:
-                if not self.is_matching(element_data.tag):
-                    errors.append("data tag does not match XSD element name")
 
-                if 'max_depth' in kwargs and kwargs['max_depth'] == 0:
-                    for e in errors:
-                        yield self.validation_error(validation, e, **kwargs)
-                    return
+        if 'max_depth' in kwargs and kwargs['max_depth'] == 0 and not level:
+            for e in errors:
+                yield self.validation_error(validation, e, **kwargs)
+            return
 
         text = None
         children = element_data.content
@@ -1052,7 +1055,7 @@ class XsdElement(XsdComponent, ParticleMixin,
 
             elif self.fixed is not None:
                 text = self.fixed
-            elif self.default is not None and kwargs.get('use_defaults'):
+            elif self.default is not None and kwargs.get('use_defaults', True):
                 text = self.default
 
         elif xsd_type.has_simple_content():
@@ -1066,7 +1069,7 @@ class XsdElement(XsdComponent, ParticleMixin,
 
             elif self.fixed is not None:
                 text = self.fixed
-            elif self.default is not None and kwargs.get('use_defaults'):
+            elif self.default is not None and kwargs.get('use_defaults', True):
                 text = self.default
 
         else:
@@ -1412,6 +1415,49 @@ class Xsd11Element(XsdElement):
             msg = _("Maybe a not equivalent type table between elements {0!r} and {1!r}")
             warnings.warn(msg.format(e1, e2), XMLSchemaTypeTableWarning, stacklevel=3)
         return True
+
+    def check_dynamic_context(self, elem: ElementType,
+                              validation: str,
+                              options: Dict[str, Any]) -> Iterator[XMLSchemaValidationError]:
+        try:
+            source = options['source']
+        except KeyError:
+            return
+
+        for ns, url in etree_iter_location_hints(elem):
+            base_url = source.base_url
+            url = normalize_url(url, base_url)
+            if any(url == schema.url for schema in self.maps.iter_schemas()):
+                continue
+
+            try:
+                if ns in self.maps.namespaces:
+                    schema = self.maps.namespaces[ns][0]
+                    schema.include_schema(url)
+                    schema.clear()
+                    schema.build()
+                else:
+                    schema = self.schema
+                    schema.import_schema(ns, url, base_url, build=True)
+
+                def stop_validation(e: ElementType, _xsd_element: XsdElement) -> bool:
+                    if e is elem:
+                        raise XMLSchemaStopValidation()
+                    return False
+
+                errors = list(schema.iter_errors(source, validation_hook=stop_validation))
+                if len(options['errors']) != len(errors) or \
+                        any(e1.elem is not e2.elem for e1, e2 in zip(options['errors'], errors)):
+                    reason = _(f"adding schema at {url} change the "
+                               f"assessment outcome of previous items")
+                    yield self.validation_error(validation, reason, elem, **options)
+
+            except (XMLSchemaValidationError, ParseError) as err:
+                yield self.validation_error(validation, err, elem, **options)
+            except XMLSchemaParseError as err:
+                yield self.validation_error(validation, err.message, elem, **options)
+            except (OSError, IOError):
+                continue
 
 
 class XsdAlternative(XsdComponent):

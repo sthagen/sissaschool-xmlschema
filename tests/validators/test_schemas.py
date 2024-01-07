@@ -641,9 +641,11 @@ class TestXMLSchema10(XsdValidatorTestCase):
         self.assertEqual(len(schema.maps.namespaces['']), 1)
 
         # Less checks on duplicate objects for schemas added after the build
-        schema.add_schema(source2, build=True)
-        self.assertEqual(len(schema.maps.namespaces['']), 2)
-        self.assertTrue(schema.maps.built)
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            schema.add_schema(source2, build=True)
+
+        self.assertIn("global element with name='elem2' is already defined",
+                      str(ctx.exception))
 
         with self.assertRaises(XMLSchemaParseError) as ec:
             schema.maps.clear()
@@ -654,13 +656,13 @@ class TestXMLSchema10(XsdValidatorTestCase):
         schema.add_schema(source2, namespace='http://xmlschema.test/ns', build=True)
         self.assertEqual(len(schema.maps.namespaces['http://xmlschema.test/ns']), 2)
 
-        # Need a rebuild to add elem2 from added schema ...
-        self.assertEqual(len(schema.elements), 1)
+        # Don't need a full rebuild to add elem2 from added schema ...
+        self.assertEqual(len(schema.elements), 2)
         schema.maps.clear()
         schema.build()
         self.assertEqual(len(schema.elements), 2)
 
-        # ... so is better to build after sources additions
+        # Or build after sources additions
         schema = self.schema_class(source1, build=False)
         schema.add_schema(source2, namespace='http://xmlschema.test/ns')
         schema.build()
@@ -959,6 +961,31 @@ class TestXMLSchema10(XsdValidatorTestCase):
         self.assertIsInstance(url, str)
         self.assertTrue(url.endswith('schemas/DSIG/xmldsig-core-schema.xsd'))
 
+    def test_include_overlap(self):
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="elem1"/>
+                <xs:element name="elem2"/>
+            </xs:schema>"""))
+
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                    <xs:element name="elem1"/>
+                    <xs:element name="elem2"/>
+                </xs:schema>"""), global_maps=schema.maps)
+
+        self.assertIn("global element with name='elem1' is already defined",
+                      str(ctx.exception))
+
+    def test_use_xpath3(self):
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="root"/>
+            </xs:schema>"""), use_xpath3=True)
+
+        self.assertFalse(schema.use_xpath3)
+
 
 class TestXMLSchema11(TestXMLSchema10):
 
@@ -993,6 +1020,37 @@ class TestXMLSchema11(TestXMLSchema10):
                     <xs:element name="root"/>
                 </xs:schema>"""))
         self.assertEqual("prefix 'x' not found in namespace map", ctx.exception.message)
+
+    def test_use_xpath3(self):
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="root"/>
+            </xs:schema>"""), use_xpath3=True)
+
+        self.assertTrue(schema.use_xpath3)
+
+        schema = self.schema_class(dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                <xs:element name="root" type="rootType"/>
+                <xs:complexType name="rootType">
+                                  <xs:assert test="let $foo := 'bar' return $foo"/>
+
+                </xs:complexType>
+            </xs:schema>"""), use_xpath3=True)
+
+        self.assertTrue(schema.use_xpath3)
+
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                    <xs:element name="root" type="rootType"/>
+                    <xs:complexType name="rootType">
+                                      <xs:assert test="let $foo := 'bar' return $foo"/>
+
+                    </xs:complexType>
+                </xs:schema>"""))
+
+        self.assertIn('XPST0003', str(ctx.exception))
 
 
 class TestXMLSchemaMeta(unittest.TestCase):

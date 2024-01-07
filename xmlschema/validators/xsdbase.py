@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, cast, Any, Dict, Generic, List, Iterator, Opti
 from xml.etree import ElementTree
 
 from elementpath import select
-from elementpath.etree import is_etree_element, etree_tostring
+from elementpath.etree import etree_tostring
 
 from ..exceptions import XMLSchemaValueError, XMLSchemaTypeError
 from ..names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, \
@@ -26,8 +26,10 @@ from ..aliases import ElementType, NamespacesType, SchemaType, BaseXsdType, \
     ComponentClassType, ExtraValidatorType, DecodeType, IterDecodeType, \
     EncodeType, IterEncodeType
 from ..translation import gettext as _
-from ..helpers import get_qname, local_name, get_prefixed_qname
+from ..helpers import get_qname, local_name, get_prefixed_qname, \
+    is_etree_element, is_etree_document
 from ..resources import XMLResource
+from ..converters import XMLSchemaConverter
 from .exceptions import XMLSchemaParseError, XMLSchemaValidationError
 
 if TYPE_CHECKING:
@@ -48,6 +50,8 @@ Ref.: https://www.w3.org/TR/xmlschema11-1/#key-va
 
 
 def check_validation_mode(validation: str) -> None:
+    if not isinstance(validation, str):
+        raise XMLSchemaTypeError(_("validation mode must be a string"))
     if validation not in XSD_VALIDATION_MODES:
         raise XMLSchemaValueError(_("validation mode can be 'strict', "
                                     "'lax' or 'skip': %r") % validation)
@@ -192,9 +196,9 @@ class XsdValidator:
     def validation_error(self, validation: str,
                          error: Union[str, Exception],
                          obj: Any = None,
-                         source: Optional[XMLResource] = None,
+                         source: Optional[Any] = None,
                          namespaces: Optional[NamespacesType] = None,
-                         **_kwargs: Any) -> XMLSchemaValidationError:
+                         **kwargs: Any) -> XMLSchemaValidationError:
         """
         Helper method for generating and updating validation errors. If validation
         mode is 'lax' or 'skip' returns the error, otherwise raises the error.
@@ -202,9 +206,9 @@ class XsdValidator:
         :param validation: an error-compatible validation mode: can be 'lax' or 'strict'.
         :param error: an error instance or the detailed reason of failed validation.
         :param obj: the instance related to the error.
-        :param source: the XML resource related to the validation process.
+        :param source: the XML resource or data related to the validation process.
         :param namespaces: is an optional mapping from namespace prefix to URI.
-        :param _kwargs: keyword arguments of the validation process that are not used.
+        :param kwargs: other keyword arguments of the validation process.
         """
         check_validation_mode(validation)
         if isinstance(error, XMLSchemaValidationError):
@@ -226,6 +230,10 @@ class XsdValidator:
 
         if validation == 'strict' and error.elem is not None:
             raise error
+
+        if 'errors' in kwargs and error not in kwargs['errors']:
+            kwargs['errors'].append(error)
+
         return error
 
     def _parse_xpath_default_namespace(self, elem: ElementType) -> str:
@@ -480,6 +488,19 @@ class XsdComponent(XsdValidator):
         else:
             self.name = f'{{{self._target_namespace}}}{local_name(self.name)}'
 
+    def _get_converter(self, obj: Any, kwargs: Dict[str, Any]) -> XMLSchemaConverter:
+        if 'source' not in kwargs:
+            if isinstance(obj, XMLResource):
+                kwargs['source'] = obj
+            elif is_etree_element(obj) or is_etree_document(obj):
+                kwargs['source'] = XMLResource(obj)
+            else:
+                kwargs['source'] = obj
+
+        converter = kwargs['converter'] = self.schema.get_converter(**kwargs)
+        kwargs['namespaces'] = converter.namespaces
+        return converter
+
     @property
     def local_name(self) -> Optional[str]:
         """The local part of the name of the component, or `None` if the name is `None`."""
@@ -494,6 +515,17 @@ class XsdComponent(XsdValidator):
     def prefixed_name(self) -> Optional[str]:
         """The name of the component in prefixed format, or `None` if the name is `None`."""
         return None if self.name is None else get_prefixed_qname(self.name, self.namespaces)
+
+    @property
+    def display_name(self) -> Optional[str]:
+        """
+        The name of the component to display when you have to refer to it with a
+        simple unambiguous format.
+        """
+        prefixed_name = self.prefixed_name
+        if prefixed_name is None:
+            return None
+        return self.name if ':' not in prefixed_name else prefixed_name
 
     @property
     def id(self) -> Optional[str]:

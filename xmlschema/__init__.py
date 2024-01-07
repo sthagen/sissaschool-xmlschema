@@ -12,8 +12,9 @@ from elementpath.etree import etree_tostring
 from . import limits
 from . import translation
 from .exceptions import XMLSchemaException, XMLResourceError, XMLSchemaNamespaceError
-from .resources import normalize_url, normalize_locations, fetch_resource, \
-    fetch_namespaces, fetch_schema_locations, fetch_schema, XMLResource
+from .locations import normalize_url, normalize_locations
+from .resources import fetch_resource, fetch_namespaces, fetch_schema_locations, \
+    fetch_schema, XMLResource
 from .xpath import ElementPathMixin
 from .converters import ElementData, XMLSchemaConverter, \
     UnorderedConverter, ParkerConverter, BadgerFishConverter, \
@@ -26,15 +27,15 @@ from .validators import (
     XMLSchemaValidatorError, XMLSchemaParseError, XMLSchemaNotBuiltError,
     XMLSchemaModelError, XMLSchemaModelDepthError, XMLSchemaValidationError,
     XMLSchemaDecodeError, XMLSchemaEncodeError, XMLSchemaChildrenValidationError,
-    XMLSchemaIncludeWarning, XMLSchemaImportWarning, XMLSchemaTypeTableWarning,
-    XsdGlobals, XMLSchemaBase, XMLSchema, XMLSchema10, XMLSchema11,
-    XsdComponent, XsdType, XsdElement, XsdAttribute
+    XMLSchemaStopValidation, XMLSchemaIncludeWarning, XMLSchemaImportWarning,
+    XMLSchemaTypeTableWarning, XsdGlobals, XMLSchemaBase, XMLSchema, XMLSchema10,
+    XMLSchema11, XsdComponent, XsdType, XsdElement, XsdAttribute
 )
 
-__version__ = '2.5.1'
+__version__ = '3.0.0'
 __author__ = "Davide Brunato"
 __contact__ = "brunato@sissa.it"
-__copyright__ = "Copyright 2016-2023, SISSA"
+__copyright__ = "Copyright 2016-2024, SISSA"
 __license__ = "MIT"
 __status__ = "Production/Stable"
 
@@ -49,8 +50,8 @@ __all__ = [
     'to_dict', 'to_json', 'to_etree', 'from_json', 'XmlDocument', 'XMLSchemaValidatorError',
     'XMLSchemaParseError', 'XMLSchemaNotBuiltError', 'XMLSchemaModelError',
     'XMLSchemaModelDepthError', 'XMLSchemaValidationError', 'XMLSchemaDecodeError',
-    'XMLSchemaEncodeError', 'XMLSchemaChildrenValidationError', 'XMLSchemaIncludeWarning',
-    'XMLSchemaImportWarning', 'XMLSchemaTypeTableWarning', 'XsdGlobals', 'XMLSchemaBase',
-    'XMLSchema', 'XMLSchema10', 'XMLSchema11', 'XsdComponent', 'XsdType', 'XsdElement',
-    'XsdAttribute',
+    'XMLSchemaEncodeError', 'XMLSchemaChildrenValidationError', 'XMLSchemaStopValidation',
+    'XMLSchemaIncludeWarning', 'XMLSchemaImportWarning', 'XMLSchemaTypeTableWarning',
+    'XsdGlobals', 'XMLSchemaBase', 'XMLSchema', 'XMLSchema10', 'XMLSchema11',
+    'XsdComponent', 'XsdType', 'XsdElement', 'XsdAttribute',
 ]

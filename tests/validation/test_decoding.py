@@ -61,6 +61,58 @@ VEHICLES_DICT_ALT = [
     {'@xsi:schemaLocation': 'http://example.com/vehicles vehicles.xsd'}
 ]
 
+VEHICLES_DICT_OVERRIDE_PREFIX_1 = {
+    '@xmlns:vh': 'http://example.com/vehicles',
+    '@xmlns:vh2': 'http://example.com/vehicles',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/vehicles vehicles.xsd',
+    'vh2:cars': {
+        'vh2:car': [
+            {'@make': 'Porsche', '@model': '911'},
+            {'@make': 'Porsche', '@model': '911'}
+        ]},
+    'vh2:bikes': {
+        'vh2:bike': [
+            {'@make': 'Harley-Davidson', '@model': 'WL'},
+            {'@make': 'Yamaha', '@model': 'XS650'}
+        ]}
+}
+
+VEHICLES_DICT_OVERRIDE_PREFIX_2 = {
+    '@xmlns': 'http://example.com/vehicles',
+    '@xmlns:vh': 'http://example.com/vehicles',
+    '@xmlns:vh-alt': 'http://example.com/vehicles',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/vehicles vehicles.xsd',
+    'vh-alt:cars': {
+        'vh-alt:car': [
+            {'@make': 'Porsche', '@model': '911'},
+            {'@make': 'Porsche', '@model': '911'}
+        ]},
+    'vh-alt:bikes': {
+        'vh-alt:bike': [
+            {'@make': 'Harley-Davidson', '@model': 'WL'},
+            {'@make': 'Yamaha', '@model': 'XS650'}
+        ]}
+}
+
+VEHICLES_DICT_OVERRIDE_PREFIX_3 = {
+    '@xmlns': 'http://example.com/vehicles',
+    '@xmlns:vh': 'http://example.com/vehicles',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/vehicles vehicles.xsd',
+    'cars': {
+        'car': [
+            {'@make': 'Porsche', '@model': '911'},
+            {'@make': 'Porsche', '@model': '911'}
+        ]},
+    'bikes': {
+        'bike': [
+            {'@make': 'Harley-Davidson', '@model': 'WL'},
+            {'@make': 'Yamaha', '@model': 'XS650'}
+        ]}
+}
+
 COLLECTION_DICT = {
     '@xmlns:col': 'http://example.com/ns/collection',
     '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
@@ -139,11 +191,11 @@ COLLECTION_PARKER_ROOT = {
                                    'year': '1925'}]}}
 
 COLLECTION_BADGERFISH = {
-    '@xmlns': {
-        'col': 'http://example.com/ns/collection',
-        'xsi': 'http://www.w3.org/2001/XMLSchema-instance'},
     'col:collection': {
         '@xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd',
+        '@xmlns': {
+            'col': 'http://example.com/ns/collection',
+            'xsi': 'http://www.w3.org/2001/XMLSchema-instance'},
         'object': [{
             '@available': True,
             '@id': 'b0836217462',
@@ -176,46 +228,48 @@ COLLECTION_BADGERFISH = {
 }
 
 COLLECTION_ABDERA = {
-    'attributes': {
-        'xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd'
-    },
-    'children': [
-        {
-            'object': [
-                {
-                    'attributes': {'available': True, 'id': 'b0836217462'},
-                    'children': [{
-                        'author': {
-                            'attributes': {'id': 'PAR'},
-                            'children': [{
-                                'born': '1841-02-25',
-                                'dead': '1919-12-03',
-                                'name': 'Pierre-Auguste Renoir',
-                                'qualification': 'painter'}
-                            ]},
-                        'estimation': 10000.0,
-                        'position': 1,
-                        'title': 'The Umbrellas',
-                        'year': '1886'}
-                    ]},
-                {
-                    'attributes': {'available': True, 'id': 'b0836217463'},
-                    'children': [{
-                        'author': {
-                            'attributes': {'id': 'JM'},
-                            'children': [{
-                                'born': '1893-04-20',
-                                'dead': '1983-12-25',
-                                'name': u'Joan Miró',
-                                'qualification': 'painter, sculptor and ceramicist'}
-                            ]},
-                        'position': 2,
-                        'title': [],
-                        'year': '1925'
+    'col:collection': {
+        'attributes': {
+            'xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd'
+        },
+        'children': [
+            {
+                'object': [
+                    {
+                        'attributes': {'available': True, 'id': 'b0836217462'},
+                        'children': [{
+                            'author': {
+                                'attributes': {'id': 'PAR'},
+                                'children': [{
+                                    'born': '1841-02-25',
+                                    'dead': '1919-12-03',
+                                    'name': 'Pierre-Auguste Renoir',
+                                    'qualification': 'painter'}
+                                ]},
+                            'estimation': 10000.0,
+                            'position': 1,
+                            'title': 'The Umbrellas',
+                            'year': '1886'}
+                        ]},
+                    {
+                        'attributes': {'available': True, 'id': 'b0836217463'},
+                        'children': [{
+                            'author': {
+                                'attributes': {'id': 'JM'},
+                                'children': [{
+                                    'born': '1893-04-20',
+                                    'dead': '1983-12-25',
+                                    'name': u'Joan Miró',
+                                    'qualification': 'painter, sculptor and ceramicist'}
+                                ]},
+                            'position': 2,
+                            'title': [],
+                            'year': '1925'
+                        }]
                     }]
-                }]
-        }
-    ]}
+            }
+        ]}
+}
 
 COLLECTION_JSON_ML = [
     'col:collection',
@@ -253,7 +307,6 @@ COLLECTION_JSON_ML = [
          ['qualification', 'painter, sculptor and ceramicist']
      ]]
 ]
-
 
 COLLECTION_COLUMNAR = {
     'collection': {
@@ -319,6 +372,150 @@ COLLECTION_COLUMNAR_ = {
             }
         }]
     }
+}
+
+COLLECTION_XMLNS_PROCESSING_STACKED = {
+    '@xmlns:col1': 'http://example.com/ns/collection',
+    '@xmlns:col': 'http://xmlschema.test/ns',
+    '@xmlns': 'http://xmlschema.test/ns',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/ns/collection collection5.xsd',
+    'col:object': [
+        {'@xmlns:col': 'http://example.com/ns/collection',
+         '@id': 'b0836217462',
+         '@available': True,
+         'col:position': 1,
+         'col:title': 'The Umbrellas',
+         'col:year': '1886',
+         'col:author': {
+             '@id': 'PAR',
+             'col:name': 'Pierre-Auguste Renoir',
+             'col:born': '1841-02-25',
+             'col:dead': '1919-12-03',
+             'col:qualification': 'painter'
+         },
+         'col:estimation': Decimal('10000.00')}],
+    'object': [
+        {'@xmlns': 'http://example.com/ns/collection',
+         '@id': 'b0836217463',
+         '@available': True,
+         'position': 2,
+         'title': None,
+         'year': '1925',
+         'author': {
+            '@id': 'JM',
+            'name': 'Joan Miró',
+            'born': '1893-04-20',
+            'dead': '1983-12-25',
+            'qualification': 'painter, sculptor and ceramicist'
+         }}
+    ]
+}
+
+COLLECTION_XMLNS_PROCESSING_COLLAPSED = {
+    '@xmlns': 'http://xmlschema.test/ns',
+    '@xmlns:col': 'http://xmlschema.test/ns',
+    '@xmlns:col0': 'http://example.com/ns/collection',
+    '@xmlns:col1': 'http://example.com/ns/collection',
+    '@xmlns:default': 'http://example.com/ns/collection',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/ns/collection collection5.xsd',
+    'col1:object': [
+        {'@id': 'b0836217462',
+         '@available': True,
+         'col1:position': 1,
+         'col1:title': 'The Umbrellas',
+         'col1:year': '1886',
+         'col1:author': {
+             '@id': 'PAR',
+             'col1:name': 'Pierre-Auguste Renoir',
+             'col1:born': '1841-02-25',
+             'col1:dead': '1919-12-03',
+             'col1:qualification': 'painter'
+         },
+         'col1:estimation': Decimal('10000.00')},
+        {'@id': 'b0836217463',
+         '@available': True,
+         'col1:position': 2,
+         'col1:title': None,
+         'col1:year': '1925',
+         'col1:author': {
+            '@id': 'JM',
+            'col1:name': 'Joan Miró',
+            'col1:born': '1893-04-20',
+            'col1:dead': '1983-12-25',
+            'col1:qualification': 'painter, sculptor and ceramicist'
+         }}
+    ]
+}
+
+COLLECTION_XMLNS_PROCESSING_ROOT_ONLY = {
+    '@xmlns': 'http://xmlschema.test/ns',
+    '@xmlns:col': 'http://xmlschema.test/ns',
+    '@xmlns:col1': 'http://example.com/ns/collection',
+    '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi:schemaLocation': 'http://example.com/ns/collection collection5.xsd',
+    'col1:object': [
+        {'@id': 'b0836217462',
+         '@available': True,
+         'col1:position': 1,
+         'col1:title': 'The Umbrellas',
+         'col1:year': '1886',
+         'col1:author': {
+             '@id': 'PAR',
+             'col1:name': 'Pierre-Auguste Renoir',
+             'col1:born': '1841-02-25',
+             'col1:dead': '1919-12-03',
+             'col1:qualification': 'painter'
+         },
+         'col1:estimation': Decimal('10000.00')},
+        {'@id': 'b0836217463',
+         '@available': True,
+         'col1:position': 2,
+         'col1:title': None,
+         'col1:year': '1925',
+         'col1:author': {
+            '@id': 'JM',
+            'col1:name': 'Joan Miró',
+            'col1:born': '1893-04-20',
+            'col1:dead': '1983-12-25',
+            'col1:qualification': 'painter, sculptor and ceramicist'
+         }}
+    ]
+}
+
+
+COLLECTION_XMLNS_PROCESSING_NONE = {
+    '@xmlns:col-alt': 'http://example.com/ns/collection',
+    '@xmlns:xsi-alt': 'http://www.w3.org/2001/XMLSchema-instance',
+    '@xsi-alt:schemaLocation': 'http://example.com/ns/collection collection5.xsd',
+    'col-alt:object': [
+        {'@id': 'b0836217462',
+         '@available': True,
+         'col-alt:position': 1,
+         'col-alt:title': 'The Umbrellas',
+         'col-alt:year': '1886',
+         'col-alt:author': {
+             '@id': 'PAR',
+             'col-alt:name': 'Pierre-Auguste Renoir',
+             'col-alt:born': '1841-02-25',
+             'col-alt:dead': '1919-12-03',
+             'col-alt:qualification': 'painter'
+         },
+         'col-alt:estimation': Decimal('10000.00')},
+        {'@id': 'b0836217463',
+         '@available': True,
+         'col-alt:position': 2,
+         'col-alt:title': None,
+         'col-alt:year': '1925',
+         'col-alt:author': {
+            '@id': 'JM',
+            'col-alt:name': 'Joan Miró',
+            'col-alt:born': '1893-04-20',
+            'col-alt:dead': '1983-12-25',
+            'col-alt:qualification': 'painter, sculptor and ceramicist'
+         }}
+    ]
 }
 
 DATA_DICT = {
@@ -482,7 +679,8 @@ class TestDecoding(XsdValidatorTestCase):
             </xs:schema>""")
 
         xml_data = '<root xmlns:ns0="http://xmlschema.test/0">ns0:foo</root>'
-        self.assertEqual(schema.decode(xml_data), 'ns0:foo')
+        self.assertEqual(schema.decode(xml_data),
+                         {'@xmlns:ns0': 'http://xmlschema.test/0', '$': 'ns0:foo'})
 
         self.assertEqual(schema.decode('<root>foo</root>'), 'foo')
 
@@ -493,7 +691,9 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertIn("Path: /root", str(ctx.exception))
 
         xml_data = '<root name="ns0:bar" xmlns:ns0="http://xmlschema.test/0">ns0:foo</root>'
-        self.assertEqual(schema.decode(xml_data), {'@name': 'ns0:bar', '$': 'ns0:foo'})
+        self.assertEqual(schema.decode(xml_data), {
+            '@xmlns:ns0': 'http://xmlschema.test/0', '@name': 'ns0:bar', '$': 'ns0:foo'
+        })
 
         # Check reverse encoding
         obj = schema.decode(xml_data, converter=JsonMLConverter)
@@ -690,9 +890,15 @@ class TestDecoding(XsdValidatorTestCase):
         self.assertEqual(xd['decimal_value'], ['abc'])
 
     def test_datatypes(self):
+        xd = self.st_schema.to_dict(self.casepath('features/decoder/data.xml'))
+        self.assertDictEqual(xd, DATA_DICT)
+
         xt = ElementTree.parse(self.casepath('features/decoder/data.xml'))
         xd = self.st_schema.to_dict(xt, namespaces=self.default_namespaces)
-        self.assertEqual(xd, DATA_DICT)
+        self.assertNotEqual(xd, DATA_DICT)
+        self.assertIn('@xmlns:xsi', xd)
+        self.assertIn('@xmlns:tns', xd)
+        self.assertIn('@xmlns:ns', xd)
 
     def test_datetime_types(self):
         xs = self.get_schema('<xs:element name="dt" type="xs:dateTime"/>')
@@ -1046,7 +1252,8 @@ class TestDecoding(XsdValidatorTestCase):
                 element_data.tag,
                 element_data.text,
                 element_data.content,
-                [x for x in element_data.attributes if x[0] != XSI_NIL]
+                [x for x in element_data.attributes if x[0] != XSI_NIL],
+                None
             )
 
         data = schema.decode(xml_file, element_hook=element_hook)
@@ -1071,7 +1278,9 @@ class TestDecoding(XsdValidatorTestCase):
           <xs:element name="foo" type="xs:string" />
         </xs:schema>""")
         self.assertEqual(xs.to_dict("""<foo xmlns="http://example.com/foo">bar</foo>""",
-                                    path='/foo', namespaces={'': 'http://example.com/foo'}), 'bar')
+                                    path='/foo', namespaces={'': 'http://example.com/foo'}),
+                         {'@xmlns': 'http://example.com/foo', '$': 'bar'})
+
         self.assertEqual(xs.to_dict("""<foo>bar</foo>""",
                                     path='/foo', namespaces={'': 'http://example.com/foo'}), None)
 
@@ -1439,7 +1648,8 @@ class TestDecoding(XsdValidatorTestCase):
                 element_data.tag,
                 element_data.text,
                 filled_content,
-                element_data.attributes
+                element_data.attributes,
+                None
             )
 
         expected = {'TEST_EL': [
@@ -1496,6 +1706,115 @@ class TestDecoding(XsdValidatorTestCase):
 
         xml_file = self.casepath('examples/menù/menù.xml')
         self.assertDictEqual(schema.decode(xml_file), MENU_DICT)
+
+    def test_xml_to_json_serialization(self):
+        xml_file = self.casepath('serialization/document.xml')
+
+        obj = xmlschema.to_json(
+            xml_file,
+            validation='skip',
+            converter=xmlschema.ParkerConverter,
+            xmlns_processing='stacked',
+        )
+        with open(self.casepath('serialization/parker.json')) as fp:
+            json_data = json.load(fp)
+
+        self.assertDictEqual(json.loads(obj), json_data)
+
+        obj = xmlschema.to_json(
+            xml_file,
+            validation='skip',
+            converter=xmlschema.BadgerFishConverter,
+            xmlns_processing='stacked',
+        )
+        with open(self.casepath('serialization/badgerfish.json')) as fp:
+            json_data = json.load(fp)
+
+        self.assertDictEqual(json.loads(obj), json_data)
+
+        obj = xmlschema.to_json(
+            xml_file,
+            validation='skip',
+            converter=xmlschema.JsonMLConverter,
+            xmlns_processing='stacked',
+        )
+        with open(self.casepath('serialization/jsonml.json')) as fp:
+            json_data = json.load(fp)
+
+        self.assertListEqual(json.loads(obj), json_data)
+
+        obj = xmlschema.to_json(
+            xml_file,
+            validation='skip',
+            converter=xmlschema.AbderaConverter,
+            xmlns_processing='stacked',
+        )
+        with open(self.casepath('serialization/abdera.json')) as fp:
+            json_data = json.load(fp)
+
+        self.assertDictEqual(json.loads(obj), json_data)
+
+    def test_xmlns_processing_argument(self):
+        xsd_file = self.casepath('examples/collection/collection5.xsd')
+        xml_file = self.casepath('examples/collection/collection-redef-xmlns.xml')
+
+        schema = self.schema_class(xsd_file)
+        self.assertTrue(schema.is_valid(xml_file))
+
+        obj = schema.decode(xml_file)
+        self.assertDictEqual(obj, COLLECTION_XMLNS_PROCESSING_STACKED)
+
+        obj = schema.decode(xml_file, xmlns_processing='stacked')
+        self.assertDictEqual(obj, COLLECTION_XMLNS_PROCESSING_STACKED)
+
+        obj = schema.decode(xml_file, xmlns_processing='collapsed')
+        self.assertDictEqual(obj, COLLECTION_XMLNS_PROCESSING_COLLAPSED)
+
+        obj = schema.decode(xml_file, xmlns_processing='root-only')
+        self.assertDictEqual(obj, COLLECTION_XMLNS_PROCESSING_ROOT_ONLY)
+
+        namespaces = {'xsi-alt': 'http://www.w3.org/2001/XMLSchema-instance',
+                      'col-alt': 'http://example.com/ns/collection'}
+        obj = schema.decode(xml_file, xmlns_processing='none', namespaces=namespaces)
+        self.assertDictEqual(obj, COLLECTION_XMLNS_PROCESSING_NONE)
+
+        with self.assertRaises(ValueError):
+            schema.decode(xml_file, xmlns_processing='precise')
+
+        with self.assertRaises(TypeError):
+            schema.decode(xml_file, xmlns_processing=True)
+
+    def test_namespaces_argument(self):
+        namespaces = {'vh': 'http://example.com/vehicles'}
+        obj = self.vh_schema.decode(self.vh_xml_file, namespaces=namespaces)
+        self.assertDictEqual(obj, VEHICLES_DICT)
+
+        namespaces = {'vh2': 'http://example.com/vehicles'}
+        obj = self.vh_schema.decode(self.vh_xml_file, namespaces=namespaces)
+        self.assertDictEqual(obj, VEHICLES_DICT_OVERRIDE_PREFIX_1)
+
+        namespaces = {'vh-alt': 'http://example.com/vehicles',
+                      '': 'http://example.com/vehicles'}
+        obj = self.vh_schema.decode(self.vh_xml_file, namespaces=namespaces)
+        self.assertDictEqual(obj, VEHICLES_DICT_OVERRIDE_PREFIX_2)
+
+        namespaces = {'': 'http://example.com/vehicles'}
+        obj = self.vh_schema.decode(self.vh_xml_file, namespaces=namespaces)
+        self.assertDictEqual(obj, VEHICLES_DICT_OVERRIDE_PREFIX_3)
+
+    def test_validation_hook_argument(self):
+        tags_num = 1
+
+        def stop_decoding(_e, _xsd_element):
+            nonlocal tags_num
+            if tags_num >= 10:
+                return True
+            tags_num += 1
+            return False
+
+        obj = self.col_schema.decode(self.col_xml_file, validation_hook=stop_decoding)
+        self.assertIn('object', obj)
+        self.assertEqual(len(obj['object']), 1)
 
 
 class TestDecoding11(TestDecoding):

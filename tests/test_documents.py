@@ -33,7 +33,7 @@ from xmlschema.names import XSD_NAMESPACE, XSI_NAMESPACE, XSD_SCHEMA
 from xmlschema.helpers import is_etree_element, is_etree_document
 from xmlschema.resources import XMLResource
 from xmlschema.documents import get_context
-from xmlschema.testing import etree_elements_assert_equal
+from xmlschema.testing import etree_elements_assert_equal, SKIP_REMOTE_TESTS
 
 
 TEST_CASES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_cases/')
@@ -94,6 +94,7 @@ class TestXmlDocuments(unittest.TestCase):
         collection = to_etree(data, path=root_tag)
         self.assertEqual(collection.tag, root_tag)
 
+    @unittest.skipIf(SKIP_REMOTE_TESTS, "Remote networks are not accessible")
     def test_to_etree_api_on_schema__issue_325(self):
         col_root = ElementTree.parse(self.col_xsd_file).getroot()
         kwargs = dict(use_defaults=False, converter=JsonMLConverter)
@@ -211,7 +212,7 @@ class TestXmlDocuments(unittest.TestCase):
 
         col_xml_resource = XMLResource(self.col_xml_file)
         col_xml_resource.root.attrib.clear()
-        self.assertEqual(col_xml_resource.get_locations(), [])
+        self.assertEqual(col_xml_resource.get_locations(root_only=False), [])
 
         source, schema = get_context(col_xml_resource, self.col_xsd_file)
         self.assertIs(source, col_xml_resource)
@@ -362,12 +363,15 @@ class TestXmlDocuments(unittest.TestCase):
 
     def test_xml_document_decode_without_schema(self):
         xml_document = XmlDocument('<x:root xmlns:x="ns" />', validation='skip')
-        self.assertIsNone(xml_document.decode())
+        self.assertIsNone(xml_document.decode(strip_namespaces=True))
+        self.assertEqual(xml_document.decode(), {'@xmlns:x': 'ns'})
 
         xml_document = XmlDocument(
             '<x:root xmlns:x="ns" a="true"><b1>10</b1><b2/></x:root>', validation='skip'
         )
-        self.assertEqual(xml_document.decode(), {'@a': 'true', 'b1': ['10'], 'b2': [None]})
+        self.assertEqual(xml_document.decode(), {
+            '@xmlns:x': 'ns', '@a': 'true', 'b1': ['10'], 'b2': [None]
+        })
 
     def test_xml_document_decode_with_xsi_type(self):
         xml_data = '<root xmlns:xsi="{}" xmlns:xs="{}" ' \

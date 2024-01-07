@@ -65,6 +65,51 @@ using the *validation* argument setted to 'lax'.
     discarded by the top-level methods *decode()* and *encode()*.
 
 
+Namespaces mapping options
+==========================
+
+Since the earlier releases the validation/decoding/encoding methods include the
+*namespaces* optional argument that can be used to provide a custom namespace
+mapping.
+In versions prior to 3 of the library the XML declarations are loaded and merged
+over the custom mapping during the XML document traversing, using alternative
+prefixes in case of collision.
+
+With version 3.0 the processing of namespace information of the XML document has
+been improved, with the default of maintaining an exact namespace mapping between
+the XML source and the decoded data.
+
+The feature is available both with the decoding and encoding API with the new converter
+option *xmlns_processing*, that permits to change the processing mode of the namespace
+declarations of the XML document.
+
+The preferred mode is *'stacked'*, the mode that maintains a stack of namespace mapping
+contexts, with the active context that always match the namespace declarations defined
+in the XML document. In this case the namespace map is updated dynamically, adding and
+removing the XML declarations found in internal elements. This choice provide the most
+accurate mapping of the namespace information of the XML document.
+
+Use the option value *'collapsed'* for loading all namespace declarations in a single
+map. In this case the declarations are merged into the namespace map of the converter,
+using alternative prefixes in case of collision.
+This is the legacy behaviour of versions prior to 3 of the library.
+
+With *'root-only'* only the namespace declarations of the XML document root are loaded.
+In this case you are expected to provide the internal namespace information with
+*namespaces* argument.
+
+Use *'none'* to not load any namespace declaration of the XML document. Use this
+option if you don't want to map namespaces to prefixes or you want to provide a
+fully custom namespace mapping.
+
+For default *xmlns_processing* option is set automatically depending by the converter
+class capability and the XML data source. The option is available also for
+encoding with updated converter classes that can retrieve xmlns declarations from
+decoded data (e.g. :class:`xmlschema.JsonMLConverter` or the default converter).
+For decoding the default is set to *'stacked'* or *'collapsed'*, for encoding the
+default can be also *'none'* if no namespace declaration can be retrieved from XML
+data (e.g. :class:`xmlschema.ParkerConverter`).
+
 Lazy validation
 ===============
 

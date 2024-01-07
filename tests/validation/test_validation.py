@@ -10,7 +10,6 @@
 #
 import unittest
 import os
-import sys
 import decimal
 from textwrap import dedent
 from xml.etree import ElementTree
@@ -21,7 +20,8 @@ except ImportError:
     lxml_etree = None
 
 import xmlschema
-from xmlschema import XMLSchemaValidationError
+from xmlschema import XMLSchemaValidationError, XMLSchemaStopValidation, \
+    XMLSchemaChildrenValidationError
 
 from xmlschema.validators import XMLSchema11
 from xmlschema.testing import XsdValidatorTestCase
@@ -62,13 +62,7 @@ class TestValidation(XsdValidatorTestCase):
         else:
             path_line = ''
 
-        if sys.version_info >= (3, 6):
-            self.assertEqual('Path: /vhx:vehicles/vhx:cars', path_line)
-        else:
-            self.assertTrue(
-                'Path: /vh:vehicles/vh:cars' == path_line or
-                'Path: /vhx:vehicles/vhx:cars', path_line
-            )  # Due to unordered dicts
+        self.assertEqual('Path: /vhx:vehicles/vhx:cars', path_line)
 
         # Issue #80
         vh_2_xt = ElementTree.parse(vh_2_file)
@@ -167,6 +161,27 @@ class TestValidation(XsdValidatorTestCase):
             self.vh_schema.validate(self.vh_xml_file, extra_validator=bikes_validator)
         self.assertIn('Reason: not an Harley-Davidson', str(ec.exception))
 
+    def test_validation_hook_argument(self):
+        resource = xmlschema.XMLResource(
+            self.casepath('examples/collection/collection-1_error.xml')
+        )
+
+        with self.assertRaises(XMLSchemaValidationError) as ec:
+            self.col_schema.validate(resource)
+        self.assertIn('invalid literal for int() with base 10', str(ec.exception))
+
+        def stop_validation(e, _xsd_element):
+            if e is ec.exception.elem:
+                raise XMLSchemaStopValidation()
+            return False
+
+        self.assertIsNone(self.col_schema.validate(resource, validation_hook=stop_validation))
+
+        def skip_validation(e, _xsd_element):
+            return e is ec.exception.elem
+
+        self.assertIsNone(self.col_schema.validate(resource, validation_hook=skip_validation))
+
     def test_path_argument(self):
         schema = self.schema_class(self.casepath('examples/vehicles/vehicles.xsd'))
 
@@ -236,7 +251,10 @@ class TestValidation(XsdValidatorTestCase):
         xml_data = '<ns0:root xmlns:ns0="http://xmlschema.test/0" >ns0:elem1</ns0:root>'
         self.check_validity(schema, xml_data, True)
 
-        self.assertEqual(schema.decode(xml_data), 'ns0:elem1')
+        self.assertEqual(schema.decode(xml_data),
+                         {'@xmlns:ns0': 'http://xmlschema.test/0', '$': 'ns0:elem1'})
+
+        self.assertEqual(schema.decode(xml_data, strip_namespaces=True), 'ns0:elem1')
 
         schema = self.schema_class("""
             <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
@@ -457,6 +475,15 @@ class TestValidation(XsdValidatorTestCase):
             schema.is_valid(self.casepath('issues/issue_363/issue_363-invalid-3.xml'),
                             namespaces={'': "http://xmlschema.test/ns"}))
 
+    def test_dynamic_schema_load(self):
+        xml_file = self.casepath('features/namespaces/dynamic-case1.xml')
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            xmlschema.validate(xml_file, cls=self.schema_class)
+
+        self.assertIn("schemaLocation declaration after namespace start",
+                      str(ctx.exception))
+
 
 class TestValidation11(TestValidation):
     schema_class = XMLSchema11
@@ -493,6 +520,55 @@ class TestValidation11(TestValidation):
         self.check_validity(schema, '<tag name="test" abc="0" def="0"/>', True)
         self.check_validity(schema, '<tag name="test" abc="1"/>', False)
         self.check_validity(schema, '<tag name="test" def="1"/>', False)
+
+    def test_optional_errors_collector(self):
+        schema = self.schema_class(self.col_xsd_file)
+        invalid_col_xml_file = self.casepath('examples/collection/collection-1_error.xml')
+
+        errors = []
+        chunks = list(schema.iter_decode(invalid_col_xml_file, errors=errors))
+        self.assertTrue(len(chunks), 2)
+        self.assertIsInstance(chunks[0], XMLSchemaValidationError)
+        self.assertTrue(len(errors), 1)
+        self.assertIs(chunks[0], errors[0])
+
+    def test_dynamic_schema_load(self):
+        xml_file = self.casepath('features/namespaces/dynamic-case1.xml')
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            xmlschema.validate(xml_file, cls=self.schema_class)
+
+        self.assertIn("global element with name='elem1' is already defined",
+                      str(ctx.exception))
+
+        xml_file = self.casepath('features/namespaces/dynamic-case1-2.xml')
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            xmlschema.validate(xml_file, cls=self.schema_class)
+
+        self.assertIn("change the assessment outcome of previous items",
+                      str(ctx.exception))
+
+    def test_incorrect_validation_errors__issue_372(self):
+        schema = self.schema_class(self.casepath('issues/issue_372/issue_372.xsd'))
+
+        xml_file = self.casepath('issues/issue_372/issue_372-1.xml')
+        errors = list(schema.iter_errors(xml_file))
+        self.assertEqual(len(errors), 1)
+
+        err = errors[0]
+        self.assertIsInstance(err, XMLSchemaChildrenValidationError)
+        self.assertEqual(err.invalid_child, err.elem[err.index])
+        self.assertEqual(err.invalid_tag, 'invalidTag')
+
+        xml_file = self.casepath('issues/issue_372/issue_372-2.xml')
+        errors = list(schema.iter_errors(xml_file))
+        self.assertEqual(len(errors), 1)
+
+        err = errors[0]
+        self.assertIsInstance(err, XMLSchemaChildrenValidationError)
+        self.assertEqual(err.invalid_child, err.elem[err.index])
+        self.assertEqual(err.invalid_tag, 'optionalSecondChildTag')
 
 
 if __name__ == '__main__':

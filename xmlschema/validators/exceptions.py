@@ -7,16 +7,19 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
+import textwrap
+from pprint import PrettyPrinter
 from typing import TYPE_CHECKING, Any, Optional, cast, Iterable, Union, Callable
+
 from elementpath.etree import etree_tostring
 
 from ..exceptions import XMLSchemaException, XMLSchemaWarning, XMLSchemaValueError
 from ..aliases import ElementType, NamespacesType, SchemaElementType, ModelParticleType
 from ..helpers import get_prefixed_qname, etree_getpath, is_etree_element
 from ..translation import gettext as _
+from ..resources import XMLResource
 
 if TYPE_CHECKING:
-    from ..resources import XMLResource
     from .xsdbase import XsdValidator
     from .groups import XsdGroup
 
@@ -30,7 +33,7 @@ class XMLSchemaValidatorError(XMLSchemaException):
     :param validator: the XSD validator.
     :param message: the error message.
     :param elem: the element that contains the error.
-    :param source: the XML resource that contains the error.
+    :param source: the XML resource or the decoded data that contains the error.
     :param namespaces: is an optional mapping from namespace prefix to URI.
     """
     _path: Optional[str]
@@ -38,7 +41,7 @@ class XMLSchemaValidatorError(XMLSchemaException):
     def __init__(self, validator: ValidatorType,
                  message: str,
                  elem: Optional[ElementType] = None,
-                 source: Optional['XMLResource'] = None,
+                 source: Optional[Any] = None,
                  namespaces: Optional[NamespacesType] = None) -> None:
         self._path = None
         self.validator = validator
@@ -48,21 +51,23 @@ class XMLSchemaValidatorError(XMLSchemaException):
         self.elem = elem
 
     def __str__(self) -> str:
-        if self.elem is None:
-            return self.message
-
-        msg = ['%s:\n' % self.message]
-        elem_as_string = cast(str, etree_tostring(self.elem, self.namespaces, '  ', 20))
-        msg.append("Schema:\n\n%s\n" % elem_as_string)
+        chunks = ['%s:\n' % self.message]
+        if self.elem is not None:
+            elem_as_string = cast(
+                str, etree_tostring(self.elem, self.namespaces, '  ', 20)
+            )
+            chunks.append("Schema component:\n\n%s\n" % elem_as_string)
 
         path = self.path
         if path is not None:
-            msg.append("Path: %s\n" % path)
+            chunks.append("Path: %s\n" % path)
+
         if self.schema_url is not None:
-            msg.append("Schema URL: %s\n" % self.schema_url)
+            chunks.append("Schema URL: %s\n" % self.schema_url)
             if self.origin_url not in (None, self.schema_url):
-                msg.append("Origin URL: %s\n" % self.origin_url)
-        return '\n'.join(msg)
+                chunks.append("Origin URL: %s\n" % self.origin_url)
+
+        return '\n'.join(chunks) if len(chunks) > 1 else chunks[0][:-2]
 
     @property
     def msg(self) -> str:
@@ -74,7 +79,7 @@ class XMLSchemaValidatorError(XMLSchemaException):
                 raise XMLSchemaValueError(
                     "'elem' attribute requires an Element, not %r." % type(value)
                 )
-            if self.source is not None:
+            if isinstance(self.source, XMLResource):
                 self._path = etree_getpath(
                     elem=value,
                     root=self.source.root,
@@ -94,9 +99,9 @@ class XMLSchemaValidatorError(XMLSchemaException):
     @property
     def root(self) -> Optional[ElementType]:
         """The XML resource root element if *source* is set."""
-        try:
-            return self.source.root  # type: ignore[union-attr]
-        except AttributeError:
+        if isinstance(self.source, XMLResource):
+            return self.source.root
+        else:
             return None
 
     @property
@@ -106,7 +111,7 @@ class XMLSchemaValidatorError(XMLSchemaException):
         try:
             url = self.validator.schema.source.url  # type: ignore[union-attr]
         except AttributeError:
-            return None
+            return getattr(self.validator, 'url', None)  # it's the schema
         else:
             return url
 
@@ -124,7 +129,7 @@ class XMLSchemaValidatorError(XMLSchemaException):
     @property
     def path(self) -> Optional[str]:
         """The XPath of the element, if it's not `None` and the XML resource is set."""
-        if self.elem is None or self.source is None:
+        if self.elem is None or not isinstance(self.source, XMLResource):
             return self._path
 
         return etree_getpath(
@@ -134,6 +139,19 @@ class XMLSchemaValidatorError(XMLSchemaException):
             relative=False,
             add_position=True
         )
+
+    def get_elem_as_string(self, indent: str = '', max_lines: Optional[int] = None) -> str:
+        """Returns a string representation of elem attribute."""
+        kwargs = {
+            'elem': self.elem,
+            'namespaces': self.namespaces,
+            'indent': indent,
+            'max_lines': max_lines
+        }
+        try:
+            return cast(str, etree_tostring(**kwargs))  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            return indent + repr(self.elem)
 
 
 class XMLSchemaNotBuiltError(XMLSchemaValidatorError, RuntimeError):
@@ -213,16 +231,20 @@ class XMLSchemaValidationError(XMLSchemaValidatorError, ValueError):
                  validator: ValidatorType,
                  obj: Any,
                  reason: Optional[str] = None,
-                 source: Optional['XMLResource'] = None,
+                 source: Optional[Any] = None,
                  namespaces: Optional[NamespacesType] = None) -> None:
-        if not isinstance(obj, str):
-            _obj = obj
+
+        if isinstance(obj, str):
+            obj_repr = repr(obj.encode('ascii', 'xmlcharrefreplace').decode('utf-8'))
         else:
-            _obj = obj.encode('ascii', 'xmlcharrefreplace').decode('utf-8')
+            obj_repr = repr(obj)
+
+        if len(obj_repr) > 200:
+            obj_repr = f"{type(obj)} instance"
 
         super(XMLSchemaValidationError, self).__init__(
             validator=validator,
-            message="failed validating {!r} with {!r}".format(_obj, validator),
+            message="failed validating {} with {!r}".format(obj_repr, validator),
             elem=obj if is_etree_element(obj) else None,
             source=source,
             namespaces=namespaces,
@@ -234,34 +256,51 @@ class XMLSchemaValidationError(XMLSchemaValidatorError, ValueError):
         return '%s(reason=%r)' % (self.__class__.__name__, self.reason)
 
     def __str__(self) -> str:
-        msg = ['%s:\n' % self.message]
+        chunks = ['%s:\n' % self.message]
 
         if self.reason is not None:
-            msg.append('Reason: %s\n' % self.reason)
+            chunks.append('Reason: %s\n' % self.reason)
 
         if hasattr(self.validator, 'tostring'):
-            chunk = self.validator.tostring('  ', 20)
-            msg.append("Schema:\n\n%s\n" % chunk)
+            component_as_string = self.validator.tostring('  ', 20)
+            chunks.append("Schema component:\n\n%s\n" % component_as_string)
 
-        if self.elem is not None and is_etree_element(self.elem):
-            try:
-                elem_as_string = cast(str, etree_tostring(self.elem, self.namespaces, '  ', 20))
-            except (ValueError, TypeError):        # pragma: no cover
-                elem_as_string = repr(self.elem)   # pragma: no cover
+        if is_etree_element(self.elem):
+            chunks.append(f"Instance type: {type(self.elem)}\n")
+            instance_as_string = self.get_elem_as_string(indent='  ', max_lines=20)
+        else:
+            chunks.append(f"Instance type: {type(self.obj)}\n")
+            instance_as_string = self.get_obj_as_string(indent='  ', max_lines=20)
 
-            if hasattr(self.elem, 'sourceline'):
-                line = getattr(self.elem, 'sourceline')
-                msg.append("Instance (line %r):\n\n%s\n" % (line, elem_as_string))
-            else:
-                msg.append("Instance:\n\n%s\n" % elem_as_string)
+        if hasattr(self.elem, 'sourceline'):
+            line = getattr(self.elem, 'sourceline')
+            chunks.append("Instance (line %r):\n\n%s\n" % (line, instance_as_string))
+        else:
+            chunks.append("Instance:\n\n%s\n" % instance_as_string)
 
         if self.path is not None:
-            msg.append("Path: %s\n" % self.path)
+            chunks.append("Path: %s\n" % self.path)
 
-        if len(msg) == 1:
-            return msg[0][:-2]
+        return '\n'.join(chunks) if len(chunks) > 1 else chunks[0][:-2]
 
-        return '\n'.join(msg)
+    def get_obj_as_string(self, indent: str = '', max_lines: Optional[int] = None) -> str:
+        """
+        Return a string representation of obj attribute, with optional indentation
+        and an optional limit on lines.
+        """
+        if is_etree_element(self.obj):
+            return self.get_elem_as_string(indent, max_lines)
+
+        pp = PrettyPrinter(indent=2, depth=6)
+        obj_as_string = pp.pformat(self.obj)
+        if indent:
+            obj_as_string = textwrap.indent(obj_as_string, prefix=indent)
+
+        if max_lines and len(obj_as_string.splitlines()) > max_lines:
+            obj_as_string = '\n'.join(obj_as_string.splitlines()[:max_lines - 3])
+            obj_as_string += f'\n\n{indent}...\n{indent}...'
+
+        return obj_as_string
 
 
 class XMLSchemaDecodeError(XMLSchemaValidationError):
@@ -281,7 +320,7 @@ class XMLSchemaDecodeError(XMLSchemaValidationError):
                  obj: Any,
                  decoder: Any,
                  reason: Optional[str] = None,
-                 source: Optional['XMLResource'] = None,
+                 source: Optional[Any] = None,
                  namespaces: Optional[NamespacesType] = None) -> None:
         super(XMLSchemaDecodeError, self).__init__(validator, obj, reason, source, namespaces)
         self.decoder = decoder
@@ -304,7 +343,7 @@ class XMLSchemaEncodeError(XMLSchemaValidationError):
                  obj: Any,
                  encoder: Any,
                  reason: Optional[str] = None,
-                 source: Optional['XMLResource'] = None,
+                 source: Optional[Any] = None,
                  namespaces: Optional[NamespacesType] = None) -> None:
         super(XMLSchemaEncodeError, self).__init__(validator, obj, reason, source, namespaces)
         self.encoder = encoder
@@ -323,13 +362,16 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
     :param source: the XML resource that contains the error.
     :param namespaces: is an optional mapping from namespace prefix to URI.
     """
+    invalid_tag: Optional[str]
+    """The tag of the invalid child element, `None` in case of an incomplete content."""
+
     def __init__(self, validator: 'XsdValidator',
                  elem: ElementType,
                  index: int,
                  particle: ModelParticleType,
                  occurs: int = 0,
                  expected: Optional[Iterable[SchemaElementType]] = None,
-                 source: Optional['XMLResource'] = None,
+                 source: Optional[Any] = None,
                  namespaces: Optional[NamespacesType] = None) -> None:
 
         self.index = index
@@ -337,12 +379,14 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
         self.occurs = occurs
         self.expected = expected
 
-        tag = get_prefixed_qname(elem.tag, validator.namespaces, use_empty=False)
         if index >= len(elem):
+            self.invalid_tag = None
+            tag = get_prefixed_qname(elem.tag, validator.namespaces, use_empty=False)
             reason = _("The content of element %r is not complete.") % tag
         else:
-            child_tag = get_prefixed_qname(elem[index].tag, validator.namespaces, use_empty=False)
-            reason = _("Unexpected child with tag %r at position %d.") % (child_tag, index + 1)
+            self.invalid_tag = elem[index].tag
+            tag = get_prefixed_qname(self.invalid_tag, validator.namespaces, use_empty=False)
+            reason = _("Unexpected child with tag %r at position %d.") % (tag, index + 1)
 
         if occurs and particle.is_missing(occurs):
             reason += " The particle %r occurs %d times but the minimum is %d." % (
@@ -358,12 +402,9 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
         else:
             expected_tags = []
             for xsd_element in expected:
-                name = xsd_element.prefixed_name
+                name = xsd_element.display_name
                 if name is not None:
-                    if ':' not in name:
-                        name = cast(str, xsd_element.name)  # avoid empty prefixes
                     expected_tags.append(name)
-
                 elif getattr(xsd_element, 'process_contents', '') == 'strict':
                     expected_tags.append(
                         'from %r namespace/s' % xsd_element.namespace  # type: ignore[union-attr]
@@ -380,6 +421,21 @@ class XMLSchemaChildrenValidationError(XMLSchemaValidationError):
 
         super(XMLSchemaChildrenValidationError, self).\
             __init__(validator, elem, reason, source, namespaces)
+
+    @property
+    def invalid_child(self) -> Optional[ElementType]:
+        """
+        The invalid child element, if any, `None` otherwise. It's `None` in case of
+        incomplete content or if the parent has been cleared during lazy validation.
+        """
+        try:
+            return self.elem[self.index] if self.elem is not None else None
+        except IndexError:
+            return None  # in case of incomplete content or lazy trees
+
+
+class XMLSchemaStopValidation(XMLSchemaException):
+    """Stops the validation process."""
 
 
 class XMLSchemaIncludeWarning(XMLSchemaWarning):

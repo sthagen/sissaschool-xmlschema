@@ -40,7 +40,6 @@ This library includes the following features:
 
 * Full XSD 1.0 and XSD 1.1 support
 * Building of XML schema objects from XSD files
-* Downloading XSD files from a remote URL and storing them for offline use
 * Validation of XML instances against XSD schemas
 * Decoding of XML data into Python data and to JSON
 * Encoding of Python data and JSON to XML
@@ -49,6 +48,7 @@ This library includes the following features:
 * Support of XSD validation modes *strict*/*lax*/*skip*
 * XML attacks protection using an XMLParser that forbids entities
 * Access control on resources addressed by an URL or filesystem path
+* Downloading XSD files from a remote URL and storing them for offline use
 * XML data bindings based on DataElement class
 * Static code generation with Jinja2 templates
 
