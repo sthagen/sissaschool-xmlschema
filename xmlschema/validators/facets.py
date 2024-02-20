@@ -18,8 +18,9 @@ from typing import TYPE_CHECKING, cast, Any, List, Optional, Pattern, Union, \
     MutableSequence, overload, Tuple, Type
 from xml.etree.ElementTree import Element
 
-from elementpath import XPath2Parser, XPathContext, ElementPathError, \
+from elementpath import XPathContext, ElementPathError, \
     translate_pattern, RegexError, ElementNode
+from elementpath.datatypes import AnyAtomicType
 
 from ..names import XSD_LENGTH, XSD_MIN_LENGTH, XSD_MAX_LENGTH, XSD_ENUMERATION, \
     XSD_INTEGER, XSD_WHITE_SPACE, XSD_PATTERN, XSD_MAX_INCLUSIVE, XSD_MAX_EXCLUSIVE, \
@@ -29,6 +30,7 @@ from ..names import XSD_LENGTH, XSD_MIN_LENGTH, XSD_MAX_LENGTH, XSD_ENUMERATION,
 from ..aliases import ElementType, SchemaType, AtomicValueType, BaseXsdType
 from ..translation import gettext as _
 from ..helpers import count_digits, local_name
+from ..xpath import XsdAssertionXPathParser
 from .exceptions import XMLSchemaValidationError, XMLSchemaDecodeError
 from .xsdbase import XsdComponent, XsdAnnotation
 
@@ -745,28 +747,6 @@ class XsdPatternFacets(MutableSequence[ElementType], XsdFacet):
         return None
 
 
-class XsdAssertionXPathParser(XPath2Parser):
-    """Parser for XSD 1.1 assertion facets."""
-
-
-XsdAssertionXPathParser.unregister('last')
-XsdAssertionXPathParser.unregister('position')
-
-
-# noinspection PyUnusedLocal
-@XsdAssertionXPathParser.method(  # type: ignore[no-untyped-def]
-    XsdAssertionXPathParser.function('last', nargs=0))
-def evaluate_last(self, context=None):
-    raise self.missing_context("context item size is undefined")
-
-
-# noinspection PyUnusedLocal
-@XsdAssertionXPathParser.method(  # type: ignore[no-untyped-def]
-    XsdAssertionXPathParser.function('position', nargs=0))
-def evaluate_position(self, context=None):
-    raise self.missing_context("context item position is undefined")
-
-
 class XsdAssertionFacet(XsdFacet):
     """
     XSD 1.1 *assertion* facet for simpleType definitions.
@@ -804,6 +784,7 @@ class XsdAssertionFacet(XsdFacet):
 
         if self.schema.use_xpath3:
             from ..xpath3 import XsdAssertionXPath3Parser
+
             parser_class: Union[
                 Type[XsdAssertionXPathParser], Type[XsdAssertionXPath3Parser]
             ] = XsdAssertionXPath3Parser
@@ -823,7 +804,7 @@ class XsdAssertionFacet(XsdFacet):
             self.parse_error(err)
             self.token = self.parser.parse('true()')
 
-    def __call__(self, value: AtomicValueType) -> None:
+    def __call__(self, value: AnyAtomicType) -> None:
         context = XPathContext(self._root, variables={'value': value})
         try:
             if not self.token.evaluate(context):

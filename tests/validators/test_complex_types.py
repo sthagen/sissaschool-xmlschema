@@ -9,6 +9,7 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 import unittest
+import warnings
 from textwrap import dedent
 from xml.etree.ElementTree import Element
 
@@ -766,6 +767,31 @@ class TestXsd11ComplexType(TestXsdComplexType):
         self.assertTrue(xsd_type.is_valid(Element('a', attrib={'min': '19', 'max': '19'})))
         self.assertFalse(xsd_type.is_valid(Element('a', attrib={'min': '25', 'max': '19'})))
         self.assertTrue(xsd_type.is_valid(Element('a', attrib={'min': '25', 'max': '100'})))
+
+    def test_rooted_expression_in_assertion__issue_386(self):
+        # absolute expression in assertion
+        xsd_file = self.casepath('tests/test_cases/issues/issue_386/issue_386.xsd')
+
+        with warnings.catch_warnings(record=True) as ctx:
+            self.schema_class(xsd_file)
+            schema = self.schema_class(xsd_file)
+
+            self.assertEqual(len(ctx), 2, "Expected two assert warnings")
+            self.assertIn("absolute location path", str(ctx[0].message))
+
+        xml_file = self.casepath('tests/test_cases/issues/issue_386/issue_386-1.xml')
+        self.assertFalse(schema.is_valid(xml_file))
+        xml_file = self.casepath('tests/test_cases/issues/issue_386/issue_386-2.xml')
+        self.assertFalse(schema.is_valid(xml_file))
+
+        # relative path in assertion
+        xsd_file = self.casepath('tests/test_cases/issues/issue_386/issue_386-2.xsd')
+        schema = XMLSchema11(xsd_file)
+
+        xml_file = self.casepath('tests/test_cases/issues/issue_386/issue_386-1.xml')
+        self.assertTrue(schema.is_valid(xml_file))
+        xml_file = self.casepath('tests/test_cases/issues/issue_386/issue_386-2.xml')
+        self.assertFalse(schema.is_valid(xml_file))
 
     def test_sequence_extension(self):
         schema = self.schema_class("""
