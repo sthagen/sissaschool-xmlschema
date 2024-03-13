@@ -44,19 +44,21 @@ from ..aliases import ElementType, XMLSourceType, NamespacesType, LocationsType,
     EncodeType, BaseXsdType, ExtraValidatorType, ValidationHookType, UriMapperType, \
     SchemaGlobalType, FillerType, DepthFillerType, ValueHookType, ElementHookType
 from ..translation import gettext as _
-from ..helpers import prune_etree, get_namespace, get_qname, is_defuse_error
+from ..helpers import set_logging_level, logged, prune_etree, get_namespace, \
+    get_qname, is_defuse_error
 from ..namespaces import NamespaceResourcesMap, NamespaceMapper, NamespaceView
 from ..locations import is_local_url, is_remote_url, url_path_is_file, \
     normalize_url, normalize_locations
 from ..resources import XMLResource
 from ..converters import XMLSchemaConverter
-from ..xpath import XsdSchemaProtocol, XMLSchemaProxy, ElementPathMixin
+from ..xpath import XMLSchemaProxy, ElementPathMixin
+from ..exports import export_schema
 from .. import dataobjects
 
 from .exceptions import XMLSchemaParseError, XMLSchemaValidationError, \
     XMLSchemaEncodeError, XMLSchemaNotBuiltError, XMLSchemaStopValidation, \
     XMLSchemaIncludeWarning, XMLSchemaImportWarning
-from .helpers import get_xsd_derivation_attribute
+from .helpers import get_xsd_derivation_attribute, get_xsd_annotation_child
 from .xsdbase import check_validation_mode, XsdValidator, XsdComponent, XsdAnnotation
 from .notations import XsdNotation
 from .identities import XsdIdentity, XsdKey, XsdKeyref, XsdUnique, \
@@ -240,7 +242,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     :ivar elements: `xsd:element` global declarations.
     :vartype elements: NamespaceView
     """
-    # Instance attributes annotations
+    # Instance attributes type annotations
     source: XMLResource
     namespaces: NamespacesType
     converter: Union[ConverterType]
@@ -264,7 +266,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     meta_schema: Optional['XMLSchemaBase'] = None
     BASE_SCHEMAS: Dict[str, str] = {}
     fallback_locations: Dict[str, str] = LOCATION_HINTS.copy()
-    _annotations = None
+    _annotations: Optional[List[XsdAnnotation]] = None
+    _components = None
+    _root_elements: Optional[Set[str]] = None
     _xpath_node: Optional[SchemaElementNode]
 
     # XSD components classes
@@ -321,15 +325,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         self.lock = threading.Lock()  # Lock for build operations
 
         if loglevel is not None:
-            if isinstance(loglevel, str):
-                level = loglevel.strip().upper()
-                if level not in {'DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR', 'CRITICAL'}:
-                    raise XMLSchemaValueError(
-                        _("{!r} is not a valid loglevel").format(loglevel)
-                    )
-                logger.setLevel(getattr(logging, level))
-            else:
-                logger.setLevel(loglevel)
+            set_logging_level(loglevel)
         elif build and global_maps is None:
             logger.setLevel(logging.WARNING)
 
@@ -360,7 +356,6 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         self._import_statements = set()
         self.includes = {}
         self.warnings = []
-        self._root_elements: Optional[Set[str]] = None
 
         self.name = self.source.name
         root = self.source.root
@@ -575,15 +570,13 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     @property
     def xpath_proxy(self) -> XMLSchemaProxy:
-        return XMLSchemaProxy(cast(XsdSchemaProtocol, self))
+        return XMLSchemaProxy(self)
 
     @property
     def xpath_node(self) -> SchemaElementNode:
+        """Returns an XPath node for processing an XPath expression on the schema instance."""
         if self._xpath_node is None:
-            self._xpath_node = build_schema_node_tree(
-                root=cast(Union[XsdSchemaProtocol], self),
-                uri=self.url
-            )
+            self._xpath_node = build_schema_node_tree(root=self, uri=self.url)
         return self._xpath_node
 
     @property
@@ -709,12 +702,37 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     @property
     def annotations(self) -> List[XsdAnnotation]:
+        """
+        Annotations related to schema object. This list includes the annotations
+        of xs:include, xs:import, xs:redefine and xs:override elements.
+        """
         if self._annotations is None:
-            self._annotations = [
-                XsdAnnotation(child, self) for child in self.source.root
-                if child.tag == XSD_ANNOTATION
-            ]
+            self._annotations = []
+            for elem in self.source.root:
+                if elem.tag == XSD_ANNOTATION:
+                    self._annotations.append(XsdAnnotation(elem, self))
+                elif elem.tag in (XSD_IMPORT, XSD_INCLUDE, XSD_DEFAULT_OPEN_CONTENT):
+                    child = get_xsd_annotation_child(elem)
+                    if child is not None:
+                        annotation = XsdAnnotation(child, self, parent_elem=elem)
+                        self._annotations.append(annotation)
+                elif elem.tag in (XSD_REDEFINE, XSD_OVERRIDE):
+                    for child in elem:
+                        if child.tag == XSD_ANNOTATION:
+                            annotation = XsdAnnotation(child, self, parent_elem=elem)
+                            self._annotations.append(annotation)
+
         return self._annotations
+
+    @property
+    def components(self) -> Dict[ElementType, XsdComponent]:
+        """A map from XSD ElementTree elements to their schema components."""
+        if self._components is None:
+            self.check_validator(self.validation)
+            self._components = {
+                c.elem: c for c in self.iter_components() if isinstance(c, XsdComponent)
+            }
+        return self._components
 
     @property
     def root_elements(self) -> List[XsdElement]:
@@ -1029,6 +1047,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """Clears the schema's XSD global maps."""
         self.maps.clear()
         self._xpath_node = None
+        self._annotations = None
+        self._components = None
+        self._root_elements = None
 
     @property
     def built(self) -> bool:
@@ -1480,20 +1501,28 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     def export(self, target: str,
                save_remote: bool = False,
                remove_residuals: bool = True,
-               exclude_locations: Optional[List[str]] = None) -> None:
+               exclude_locations: Optional[List[str]] = None,
+               loglevel: Optional[Union[str, int]] = None) -> None:
         """
         Exports a schema instance. The schema instance is exported to a
         directory with also the hierarchy of imported/included schemas.
 
         :param target: a path to a local empty directory.
         :param save_remote: if `True` is provided saves also remote schemas.
-        :param remove_residuals: for default removes residual schema locations \
-        from redundant import statements.
+        :param remove_residuals: for default removes residual remote schema \
+        locations from redundant import statements.
         :param exclude_locations: explicitly exclude schema locations from \
         substitution or removal.
+        :param loglevel: for setting a different logging level for schema export.
         """
-        from ..exports import export_schema
-        export_schema(self, target, save_remote, remove_residuals, exclude_locations)
+        logged(export_schema)(
+            obj=self,
+            target_dir=target,
+            save_remote=save_remote,
+            remove_residuals=remove_residuals,
+            exclude_locations=exclude_locations,
+            loglevel=loglevel
+        )
 
     def version_check(self, elem: ElementType) -> bool:
         """
@@ -1768,7 +1797,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         else:
             selector = resource.iter_depth(mode=4, ancestors=ancestors)
 
-        elem: Optional[Element] = None
+        elem: Optional[ElementType] = None
         for elem in selector:
             if elem is resource.root:
                 if resource.lazy_depth:

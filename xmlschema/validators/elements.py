@@ -36,8 +36,7 @@ from ..namespaces import NamespaceMapper
 from ..locations import normalize_url
 from .. import dataobjects
 from ..converters import ElementData, XMLSchemaConverter
-from ..xpath import XsdSchemaProtocol, XsdElementProtocol, XMLSchemaProxy, \
-    ElementPathMixin, XPathElement
+from ..xpath import XMLSchemaProxy, ElementPathMixin, XPathElement
 from ..resources import XMLResource
 
 from .exceptions import XMLSchemaNotBuiltError, XMLSchemaValidationError, \
@@ -118,7 +117,7 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     binding: Optional[DataBindingType] = None
 
-    def __init__(self, elem: Element,
+    def __init__(self, elem: ElementType,
                  schema: SchemaType,
                  parent: Optional[XsdComponent] = None,
                  build: bool = True) -> None:
@@ -394,20 +393,17 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     @property
     def xpath_proxy(self) -> XMLSchemaProxy:
-        return XMLSchemaProxy(
-            schema=cast(XsdSchemaProtocol, self.schema),
-            base_element=cast(XsdElementProtocol, self)
-        )
+        return XMLSchemaProxy(self.schema, self)
 
     @property
     def xpath_node(self) -> SchemaElementNode:
         schema_node = self.schema.xpath_node
-        node = schema_node.get_element_node(cast(XsdElementProtocol, self))
+        node = schema_node.get_element_node(self)
         if isinstance(node, SchemaElementNode):
             return node
 
         return build_schema_node_tree(
-            root=cast(XsdElementProtocol, self),
+            root=self,
             elements=schema_node.elements,
             global_elements=schema_node.children,
         )
@@ -668,19 +664,16 @@ class XsdElement(XsdComponent, ParticleMixin,
                                 identity, "identity selector is not built"
                             )
 
-                        context = XPathContext(
-                            root=self.schema.xpath_node,
-                            item=cast(XsdElementProtocol, xpath_element)
-                        )
+                        context = XPathContext(root=self.schema.xpath_node, item=xpath_element)
 
                         for e in identity.selector.token.select_results(context):
-                            if not isinstance(e, (XsdElement, XsdAnyElement)):
+                            if isinstance(e, XsdElement):
+                                if e not in identity.elements:
+                                    identity.elements[e] = None
+                                    e.selected_by.add(identity)
+                            elif not isinstance(e, XsdAnyElement):
                                 reason = _("selector xpath expression can only select elements")
                                 yield self.validation_error(validation, reason, e, **kwargs)
-                            elif e not in identity.elements:
-                                identity.elements[e] = None
-                                if isinstance(e, XsdElement):
-                                    e.selected_by.add(identity)
 
             if xsd_type.is_blocked(self):
                 reason = _("usage of %r is blocked") % xsd_type

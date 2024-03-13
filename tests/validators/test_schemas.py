@@ -25,7 +25,8 @@ from xml.etree.ElementTree import Element
 import xmlschema
 from xmlschema import XMLSchemaParseError, XMLSchemaIncludeWarning, XMLSchemaImportWarning
 from xmlschema.names import XML_NAMESPACE, LOCATION_HINTS, SCHEMAS_DIR, XSD_ELEMENT, XSI_TYPE
-from xmlschema.validators import XMLSchemaBase, XMLSchema10, XMLSchema11, XsdGlobals
+from xmlschema.validators import XMLSchemaBase, XMLSchema10, XMLSchema11, \
+    XsdGlobals, XsdComponent
 from xmlschema.testing import SKIP_REMOTE_TESTS, XsdValidatorTestCase
 from xmlschema.validators.schemas import logger
 
@@ -217,6 +218,15 @@ class TestXMLSchema10(XsdValidatorTestCase):
         xsd_type = schema.types["Magic"]
         self.assertIsNotNone(xsd_type._annotation)  # xs:simpleType annotations are not lazy parsed
         self.assertEqual(str(xsd_type.annotation), ' stuff ')
+
+    def test_components(self):
+        components = self.col_schema.components
+        self.assertIsInstance(components, dict)
+        self.assertEqual(len(components), 25)
+
+        for elem, component in components.items():
+            self.assertIsInstance(component, XsdComponent)
+            self.assertIs(elem, component.elem)
 
     def test_annotation_string(self):
         schema = self.check_schema("""
@@ -830,6 +840,16 @@ class TestXMLSchema10(XsdValidatorTestCase):
             self.assertEqual(ns_schemas[1].name, 'cars.xsd')
             self.assertEqual(ns_schemas[2].name, 'types.xsd')
             self.assertEqual(ns_schemas[3].name, 'bikes.xsd')
+
+        self.assertFalse(os.path.isdir(dirname))
+
+        # Test with DEBUG logging level
+        with tempfile.TemporaryDirectory() as dirname:
+            with self.assertLogs('xmlschema', level='DEBUG') as ctx:
+                vh_schema.export(target=dirname, save_remote=True, loglevel='DEBUG')
+                self.assertGreater(len(ctx.output), 0)
+                self.assertTrue(any('Write modified XSD' in line for line in ctx.output))
+                self.assertTrue(any('Write unchanged XSD' in line for line in ctx.output))
 
         self.assertFalse(os.path.isdir(dirname))
 

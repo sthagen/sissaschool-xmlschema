@@ -9,7 +9,7 @@
 #
 import threading
 import warnings
-from typing import TYPE_CHECKING, cast, Any, Dict, Iterator, Optional, Union, Type
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union, Type
 
 from elementpath import ElementPathError, XPath2Parser, XPathContext, \
     LazyElementNode, SchemaElementNode, build_schema_node_tree
@@ -17,8 +17,7 @@ from elementpath import ElementPathError, XPath2Parser, XPathContext, \
 from ..names import XSD_ASSERT
 from ..aliases import ElementType, SchemaType, SchemaElementType, NamespacesType
 from ..translation import gettext as _
-from ..xpath import XsdSchemaProtocol, XsdElementProtocol, ElementPathMixin, \
-    XMLSchemaProxy
+from ..xpath import ElementPathMixin, XMLSchemaProxy
 
 from .exceptions import XMLSchemaNotBuiltError, XMLSchemaValidationError, \
     XMLSchemaAssertPathWarning
@@ -185,21 +184,17 @@ class XsdAssert(XsdComponent, ElementPathMixin[Union['XsdAssert', SchemaElementT
 
     @property
     def xpath_proxy(self) -> 'XMLSchemaProxy':
-        # FIXME: need a fix in elementpath protocols (use generic)
-        return XMLSchemaProxy(
-            schema=cast(XsdSchemaProtocol, self.schema),
-            base_element=cast(XsdElementProtocol, self)
-        )
+        return XMLSchemaProxy(self.schema, self)
 
     @property
     def xpath_node(self) -> SchemaElementNode:
         schema_node = self.schema.xpath_node
-        node = schema_node.get_element_node(cast(XsdElementProtocol, self))
+        node = schema_node.get_element_node(self)
         if isinstance(node, SchemaElementNode):
             return node
 
         return build_schema_node_tree(
-            root=cast(XsdElementProtocol, self),
+            root=self,
             uri=schema_node.uri,
             elements=schema_node.elements,
             global_elements=schema_node.children,

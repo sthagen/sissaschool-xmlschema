@@ -1,14 +1,15 @@
 #
-# Copyright (c), 2016-2021, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
 # distribution, or http://opensource.org/licenses/MIT.
 #
-# @author Davide Brunato <brunato@sissa.it>
+# @author Mikhail Razgovorov <1338833@gmail.com>
 #
 from collections.abc import MutableMapping, MutableSequence
-from typing import TYPE_CHECKING, Any, Optional, List, Dict, Type, Union, Tuple
+from typing import TYPE_CHECKING, Any, Optional, List, Dict, Type, Union, \
+    Tuple, Container
 
 from ..aliases import NamespacesType, BaseXsdType
 from ..names import XSD_ANY_TYPE
@@ -20,16 +21,17 @@ if TYPE_CHECKING:
     from ..validators import XsdElement
 
 
-class BadgerFishConverter(XMLSchemaConverter):
+class GDataConverter(XMLSchemaConverter):
     """
-    XML Schema based converter class for Badgerfish convention.
+    XML Schema based converter class for GData protocol convention.
 
-    ref: http://www.sklar.com/badgerfish/
-    ref: http://badgerfish.ning.com/
+    ref: https://developers.google.com/gdata/docs/json
 
     :param namespaces: Map from namespace prefixes to URI.
     :param dict_class: Dictionary class to use for decoded data. Default is `dict`.
     :param list_class: List class to use for decoded data. Default is `list`.
+    :param kwargs: Additional keyword arguments to pass to base converter and \
+    namespace mapper classes.
     """
     __slots__ = ()
 
@@ -37,19 +39,40 @@ class BadgerFishConverter(XMLSchemaConverter):
                  dict_class: Optional[Type[Dict[str, Any]]] = None,
                  list_class: Optional[Type[List[Any]]] = None,
                  **kwargs: Any) -> None:
-        kwargs.update(attr_prefix='@', text_key='$', cdata_prefix='$')
-        super(BadgerFishConverter, self).__init__(
+        kwargs.update(attr_prefix='', text_key='$t', cdata_prefix='$')
+        super(GDataConverter, self).__init__(
             namespaces, dict_class, list_class, **kwargs
         )
 
     @property
     def lossy(self) -> bool:
-        return False
+        return True  # a child element can override an attribute in the same namespace
+
+    def map_qname(self, qname: str) -> str:
+        name = super().map_qname(qname)
+        if name.startswith('{') or ':' not in name:
+            return name
+        else:
+            return name.replace(':', '$')
+
+    def unmap_qname(self, qname: str,
+                    name_table: Optional[Container[Optional[str]]] = None,
+                    xmlns: Optional[List[Tuple[str, str]]] = None) -> str:
+        if '$' in qname and not qname.startswith('$'):
+            qname = qname.replace('$', ':')
+        return super().unmap_qname(qname, name_table, xmlns)
 
     def get_xmlns_from_data(self, obj: Any) -> Optional[List[Tuple[str, str]]]:
-        if not self._use_namespaces or not isinstance(obj, MutableMapping) or '@xmlns' not in obj:
+        if not self._use_namespaces or not isinstance(obj, MutableMapping):
             return None
-        return [(k if k != '$' else '', v) for k, v in obj['@xmlns'].items()]
+
+        xmlns = []
+        for k, v in obj.items():
+            if k == 'xmlns':
+                xmlns.append(('', v))
+            elif k.startswith('xmlns$'):
+                xmlns.append((k[6:], v))
+        return xmlns
 
     @stackable
     def element_decode(self, data: ElementData, xsd_element: 'XsdElement',
@@ -61,12 +84,12 @@ class BadgerFishConverter(XMLSchemaConverter):
 
         xmlns = self.get_effective_xmlns(data.xmlns, level, xsd_element)
         if self._use_namespaces and xmlns:
-            result_dict['@xmlns'] = self.dict((k or '$', v) for k, v in xmlns)
+            result_dict.update((f'xmlns${k}' if k else 'xmlns', v) for k, v in xmlns)
 
         xsd_group = xsd_type.model_group
         if xsd_group is None or not data.content:
             if data.text is not None:
-                result_dict['$'] = data.text
+                result_dict['$t'] = data.text
         else:
             has_single_group = xsd_group.is_single()
             for name, item, xsd_child in self.map_content(data.content):
@@ -100,37 +123,33 @@ class BadgerFishConverter(XMLSchemaConverter):
         tag = xsd_element.name
         if not isinstance(obj, MutableMapping):
             raise XMLSchemaTypeError(f"A dictionary expected, got {type(obj)} instead.")
-        elif len(obj) != 1 or '$' in obj:
+        elif len(obj) != 1 or '$t' in obj:
             element_data = obj
-        elif tag in obj:
-            element_data = obj[tag]
         else:
-            try:
-                element_data = obj[self.map_qname(tag)]
-            except KeyError:
-                for k, v in obj.items():
-                    if not k.startswith(('$', '@')) and local_name(k) == local_name(tag):
+            for k, v in obj.items():
+                if isinstance(v, MutableMapping):
+                    if '$' in k and not k.startswith(('$', '{')):
+                        k = k.replace('$', ':')
+                    if k == tag or local_name(k) == local_name(tag):
                         element_data = v
                         break
-                else:
-                    element_data = obj
+            else:
+                element_data = obj
 
         text = None
         content: List[Tuple[Union[str, int], Any]] = []
         attributes = {}
 
         xmlns = self.set_context(element_data, level)
-
         for name, value in element_data.items():
-            if name == '@xmlns':
-                continue
-            elif name == '$':
+            if name == '$t':
                 text = value
             elif name[0] == '$' and name[1:].isdigit():
                 content.append((int(name[1:]), value))
-            elif name[0] == '@':
-                attr_name = name[1:]
-                ns_name = self.unmap_qname(attr_name, xsd_element.attributes)
+            elif not isinstance(value, (MutableMapping, MutableSequence)):
+                if name == 'xmlns' or name.startswith('xmlns$'):
+                    continue  # an xmlns declaration
+                ns_name = self.unmap_qname(name, xsd_element.attributes)
                 attributes[ns_name] = value
             elif not isinstance(value, MutableSequence) or not value:
                 ns_name = self.unmap_qname(name, xmlns=self.get_xmlns_from_data(value))
@@ -155,6 +174,13 @@ class BadgerFishConverter(XMLSchemaConverter):
                             content.extend((ns_name, item) for item in value)
                         break
                 else:
+                    if isinstance(value, MutableSequence):
+                        # Fallback tentative to an attribute if no element match
+                        ns_name = self.unmap_qname(name, xsd_element.attributes)
+                        if ns_name in xsd_element.attributes:
+                            attributes[ns_name] = value
+                            continue
+
                     content.append((ns_name, value))
 
         return ElementData(tag, text, content, attributes, xmlns)
