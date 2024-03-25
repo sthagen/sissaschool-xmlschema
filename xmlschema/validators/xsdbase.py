@@ -21,7 +21,7 @@ from elementpath.etree import etree_tostring
 from ..exceptions import XMLSchemaValueError, XMLSchemaTypeError
 from ..names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, \
     XSD_ANY_TYPE, XSD_ANY_SIMPLE_TYPE, XSD_ANY_ATOMIC_TYPE, XSD_ID, \
-    XSD_QNAME, XSD_OVERRIDE, XSD_NOTATION_TYPE, XSD_DECIMAL
+    XSD_QNAME, XSD_OVERRIDE, XSD_NOTATION_TYPE, XSD_DECIMAL, XMLNS_NAMESPACE
 from ..aliases import ElementType, NamespacesType, SchemaType, BaseXsdType, \
     ComponentClassType, ExtraValidatorType, DecodeType, IterDecodeType, \
     EncodeType, IterEncodeType
@@ -484,6 +484,11 @@ class XsdComponent(XsdValidator):
             return
 
         self._target_namespace = self.elem.attrib['targetNamespace'].strip()
+        if self._target_namespace == XMLNS_NAMESPACE:
+            # https://www.w3.org/TR/xmlschema11-1/#sec-nss-special
+            msg = _(f"The namespace {XMLNS_NAMESPACE} cannot be used as 'targetNamespace'")
+            raise XMLSchemaValueError(msg)
+
         if 'name' not in self.elem.attrib:
             msg = _("attribute 'name' must be present when "
                     "'targetNamespace' attribute is provided")
@@ -786,24 +791,7 @@ class XsdType(XsdComponent):
         is the primitive type. For a list is the primitive type of the item.
         For a union is the base union type. For a complex type is xs:anyType.
         """
-        if getattr(self, 'attributes', None):
-            return cast('XsdComplexType', self.maps.types[XSD_ANY_TYPE])
-        elif self.base_type is None:
-            if self.is_simple():
-                return cast('XsdSimpleType', self)
-            return cast('XsdComplexType', self.maps.types[XSD_ANY_TYPE])
-
-        primitive_type: BaseXsdType
-        try:
-            if self.base_type.is_simple():
-                primitive_type = self.base_type.primitive_type  # type: ignore[union-attr]
-            else:
-                primitive_type = self.base_type.content.primitive_type  # type: ignore[union-attr]
-        except AttributeError:
-            # The type has complex or XsdList content
-            return self.base_type.root_type
-        else:
-            return primitive_type
+        raise NotImplementedError()
 
     @property
     def simple_type(self) -> Optional['XsdSimpleType']:
@@ -916,9 +904,7 @@ class XsdType(XsdComponent):
         return any(self.is_derived(xsd_type, derivation) for derivation in _block)
 
     def is_dynamic_consistent(self, other: Any) -> bool:
-        return other.name == XSD_ANY_TYPE or self.is_derived(other) or \
-            hasattr(other, 'member_types') and \
-            any(self.is_derived(mt) for mt in other.member_types)  # pragma: no cover
+        raise NotImplementedError()
 
     def is_key(self) -> bool:
         return self.name == XSD_ID or self.is_derived(self.maps.types[XSD_ID])

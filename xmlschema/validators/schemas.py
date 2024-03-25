@@ -23,6 +23,7 @@ import re
 import sys
 from copy import copy as _copy, deepcopy
 from operator import attrgetter
+from pathlib import Path
 from typing import cast, Callable, ItemsView, List, Optional, Dict, Any, \
     Set, Union, Tuple, Type, Iterator, Counter
 from xml.etree.ElementTree import Element, ParseError
@@ -38,13 +39,13 @@ from ..names import VC_MIN_VERSION, VC_MAX_VERSION, VC_TYPE_AVAILABLE, \
     XSD_ANY_ATTRIBUTE, XSD_ANY_TYPE, XSD_NAMESPACE, XML_NAMESPACE, XSI_NAMESPACE, \
     VC_NAMESPACE, SCHEMAS_DIR, LOCATION_HINTS, XSD_ANNOTATION, XSD_INCLUDE, \
     XSD_IMPORT, XSD_REDEFINE, XSD_OVERRIDE, XSD_DEFAULT_OPEN_CONTENT, \
-    XSD_ANY_SIMPLE_TYPE, XSD_UNION, XSD_LIST, XSD_RESTRICTION
+    XSD_ANY_SIMPLE_TYPE, XSD_UNION, XSD_LIST, XSD_RESTRICTION, XMLNS_NAMESPACE
 from ..aliases import ElementType, XMLSourceType, NamespacesType, LocationsType, \
     SchemaType, SchemaSourceType, ConverterType, ComponentClassType, DecodeType, \
     EncodeType, BaseXsdType, ExtraValidatorType, ValidationHookType, UriMapperType, \
     SchemaGlobalType, FillerType, DepthFillerType, ValueHookType, ElementHookType
 from ..translation import gettext as _
-from ..helpers import set_logging_level, logged, prune_etree, get_namespace, \
+from ..helpers import set_logging_level, prune_etree, get_namespace, \
     get_qname, is_defuse_error
 from ..namespaces import NamespaceResourcesMap, NamespaceMapper, NamespaceView
 from ..locations import is_local_url, is_remote_url, url_path_is_file, \
@@ -382,6 +383,11 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         elif '' not in self.namespaces:
             # If not declared map the default namespace to no namespace
             self.namespaces[''] = ''
+
+        if self.target_namespace == XMLNS_NAMESPACE:
+            # https://www.w3.org/TR/xmlschema11-1/#sec-nss-special
+            msg = _(f"The namespace {XMLNS_NAMESPACE} cannot be used as 'targetNamespace'")
+            raise XMLSchemaValueError(msg)
 
         logger.debug("Schema targetNamespace is %r", self.target_namespace)
         logger.debug("Declared namespaces: %r", self.namespaces)
@@ -1003,27 +1009,6 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     __copy__ = copy
 
-    @classmethod
-    def check_schema(cls, schema: SchemaType,
-                     namespaces: Optional[NamespacesType] = None) -> None:
-        """
-        Validates the given schema against the XSD meta-schema (:attr:`meta_schema`).
-
-        :param schema: the schema instance that has to be validated.
-        :param namespaces: is an optional mapping from namespace prefix to URI.
-
-        :raises: :exc:`XMLSchemaValidationError` if the schema is invalid.
-        """
-        if cls.meta_schema is None:
-            raise XMLSchemaRuntimeError(_("meta-schema unavailable for %r") % cls)
-
-        msg = f"check_schema() class method will be removed in v3.0, use " \
-            f"{cls.__name__}.meta_schema instead for validating XSD data."
-        warnings.warn(msg, DeprecationWarning, stacklevel=1)
-
-        for error in cls.meta_schema.iter_errors(schema.source, namespaces=namespaces):
-            raise error
-
     def check_validator(self, validation: str = 'strict') -> None:
         """Checks the status of a schema validator against a validation mode."""
         check_validation_mode(validation)
@@ -1498,11 +1483,11 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             use_xpath3=self.use_xpath3,
         )
 
-    def export(self, target: str,
+    def export(self, target: Union[str, Path],
                save_remote: bool = False,
                remove_residuals: bool = True,
                exclude_locations: Optional[List[str]] = None,
-               loglevel: Optional[Union[str, int]] = None) -> None:
+               loglevel: Optional[Union[str, int]] = None) -> Dict[str, str]:
         """
         Exports a schema instance. The schema instance is exported to a
         directory with also the hierarchy of imported/included schemas.
@@ -1514,10 +1499,11 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         :param exclude_locations: explicitly exclude schema locations from \
         substitution or removal.
         :param loglevel: for setting a different logging level for schema export.
+        :return: a dictionary containing the map of modified locations.
         """
-        logged(export_schema)(
-            obj=self,
-            target_dir=target,
+        return export_schema(
+            schema=self,
+            target=target,
             save_remote=save_remote,
             remove_residuals=remove_residuals,
             exclude_locations=exclude_locations,
@@ -2224,7 +2210,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             if path is not None:
                 reason = _("the path %r doesn't match any element of the schema!") % path
             else:
-                reason = _("unable to select an element for decoding data, "
+                reason = _("unable to select an element for encoding data, "
                            "provide a valid 'path' argument.")
             raise XMLSchemaEncodeError(self, obj, self.elements, reason, namespaces=namespaces)
         else:
@@ -2283,6 +2269,7 @@ class XMLSchema10(XMLSchemaBase):
       attributeGroup) | element | attribute | notation), annotation*)*)
     </schema>
     """
+    meta_schema: XMLSchemaBase
     meta_schema = os.path.join(SCHEMAS_DIR, 'XSD_1.0/XMLSchema.xsd')  # type: ignore
     BASE_SCHEMAS = {
         XML_NAMESPACE: os.path.join(SCHEMAS_DIR, 'XML/xml_minimal.xsd'),
@@ -2325,6 +2312,7 @@ class XMLSchema11(XMLSchemaBase):
       attributeGroup) | element | attribute | notation), annotation*)*)
     </schema>
     """
+    meta_schema: XMLSchemaBase
     meta_schema = os.path.join(SCHEMAS_DIR, 'XSD_1.1/XMLSchema.xsd')  # type: ignore
     XSD_VERSION = '1.1'
 

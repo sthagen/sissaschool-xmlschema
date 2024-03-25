@@ -8,8 +8,6 @@
 #
 # @author Davide Brunato <brunato@sissa.it>
 #
-"""Tests concerning XML resources"""
-
 import unittest
 import os
 import pathlib
@@ -22,7 +20,7 @@ from unittest.mock import patch, MagicMock
 import xmlschema.locations
 from xmlschema.locations import LocationPath, LocationPosixPath, LocationWindowsPath, \
     is_url, is_local_url, is_remote_url, url_path_is_file, normalize_url, \
-    normalize_locations
+    normalize_locations, match_location
 
 TEST_CASES_DIR = str(pathlib.Path(__file__).absolute().parent.joinpath('test_cases'))
 
@@ -381,9 +379,38 @@ class TestLocations(unittest.TestCase):
         self.assertListEqual(locations, [('tns0', 'file:alpha'),
                                          ('tns1', 'http://example.com/beta')])
 
+    def test_match_location(self):
+        self.assertIsNone(match_location('schema.xsd', []))
+
+        locations = ['schema1.xsd', 'schema']
+        self.assertIsNone(match_location('schema.xsd', locations))
+
+        locations = ['schema.xsd', 'schema']
+        self.assertEqual(match_location('schema.xsd', locations), 'schema.xsd')
+
+        locations = ['schema', 'schema.xsd']
+        self.assertEqual(match_location('schema.xsd', locations), 'schema.xsd')
+
+        locations = ['../schema.xsd', 'a/schema.xsd']
+        self.assertIsNone(match_location('schema.xsd', locations))
+
+        locations = ['../schema.xsd', 'b/schema.xsd']
+        self.assertEqual(match_location('a/schema.xsd', locations), '../schema.xsd')
+
+        locations = ['../schema.xsd', 'a/schema.xsd']
+        self.assertEqual(match_location('a/schema.xsd', locations), 'a/schema.xsd')
+
+        locations = ['../schema.xsd', './a/schema.xsd']
+        self.assertEqual(match_location('a/schema.xsd', locations), './a/schema.xsd')
+
+        locations = ['/../schema.xsd', '/a/schema.xsd']
+        self.assertIsNone(match_location('a/schema.xsd', locations))
+        self.assertEqual(match_location('/a/schema.xsd', locations), '/a/schema.xsd')
+        self.assertEqual(match_location('/schema.xsd', locations), '/../schema.xsd')
+
 
 if __name__ == '__main__':
-    header_template = "Test xmlschema's locations with Python {} on platform {}"
+    header_template = "Test xmlschema locations.py module with Python {} on platform {}"
     header = header_template.format(platform.python_version(), platform.platform())
     print('{0}\n{1}\n{0}'.format("*" * len(header), header))
 
