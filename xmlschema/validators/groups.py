@@ -22,7 +22,8 @@ from ..exceptions import XMLSchemaValueError
 from ..names import XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE, XSD_ELEMENT, \
     XSD_ANY, XSI_TYPE, XSD_ANY_TYPE, XSD_ANNOTATION
 from ..aliases import ElementType, NamespacesType, SchemaType, IterDecodeType, \
-    IterEncodeType, ModelParticleType, SchemaElementType, ComponentClassType
+    IterEncodeType, ModelParticleType, SchemaElementType, ComponentClassType, \
+    OccursCounterType
 from ..translation import gettext as _
 from ..helpers import get_qname, local_name, raw_xml_encode
 from ..converters import ElementData
@@ -98,7 +99,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
     restriction: Optional['XsdGroup'] = None
 
     # For XSD 1.1 openContent processing
-    interleave: Optional[Xsd11AnyElement] = None  # if openContent with mode='interleave'
+    interleave: Optional['XsdGroup'] = None  # if openContent with mode='interleave'
     suffix: Optional[Xsd11AnyElement] = None  # if openContent with mode='suffix'/'interleave'
 
     _ADMITTED_TAGS = {XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE}
@@ -108,6 +109,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                  parent: Optional[Union['XsdComplexType', 'XsdGroup']] = None) -> None:
 
         self._group: List[ModelParticleType] = []
+        self.oid = (self,)
         if parent is not None and parent.mixed:
             self.mixed = parent.mixed
         super(XsdGroup, self).__init__(elem, schema, parent)
@@ -410,6 +412,41 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 max_occurs *= group.max_occurs
 
         return max_occurs
+
+    def is_missing(self, occurs: Union[OccursCounterType, int]) -> bool:
+        try:
+            value = occurs[self.oid] or occurs[self]  # type: ignore[index]
+        except TypeError:
+            value = occurs
+
+        return not self.is_emptiable() if value == 0 else self.min_occurs > value
+
+    def get_expected(self, occurs: OccursCounterType) -> List[SchemaElementType]:
+        """
+        Returns the expected elements of the current and descendant groups
+        given a counter of occurrences. Returns an empty list if the group
+        reached the maximum number of occurrences.
+        """
+        expected: List[SchemaElementType] = []
+        items: Union['XsdGroup', Iterator[ModelParticleType]]
+
+        if self.is_over(occurs):
+            return expected
+        elif self.model == 'choice':
+            items = self
+        else:
+            items = (p for p in self._group if p.min_occurs > occurs[p])
+
+        for p in items:
+            if isinstance(p, XsdGroup):
+                expected.extend(
+                    e for e in p.iter_elements() if e.min_occurs > occurs[e]
+                )
+            else:
+                expected.append(p)
+                if p.name in p.maps.substitution_groups:
+                    expected.extend(p.maps.substitution_groups[p.name])
+        return expected
 
     def copy(self) -> 'XsdGroup':
         group: XsdGroup = object.__new__(self.__class__)
@@ -947,7 +984,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         xsd_element: Optional[SchemaElementType]
         expected: Optional[List[SchemaElementType]]
 
-        model = ModelVisitor(self)
+        model = ModelVisitor(self.interleave or self)
         errors = []
         broken_model = False
         namespaces = converter.namespaces
@@ -969,11 +1006,6 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                     )
 
                 if xsd_element is None:
-                    if self.interleave is not None and self.interleave.is_matching(
-                            child.tag, default_namespace, self, model.occurs):
-                        xsd_element = self.interleave
-                        break
-
                     for particle, occurs, expected in model.advance(False):
                         errors.append((index, particle, occurs, expected))
                         model.clear()
@@ -1081,7 +1113,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         converter = kwargs['converter']
         padding = '\n' + ' ' * converter.indent * level
         default_namespace = converter.get('')
-        model = ModelVisitor(self)
+        model = ModelVisitor(self.interleave or self)
         index = cdata_index = 0
         wrong_content_type = False
         over_max_depth = 'max_depth' in kwargs and kwargs['max_depth'] <= level
@@ -1117,47 +1149,43 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 continue
 
             xsd_element: Optional[SchemaElementType]
-            if self.interleave and self.interleave.is_matching(name, default_namespace, group=self):
-                xsd_element = self.interleave
-                value = get_qname(default_namespace, name), value
-            else:
-                while model.element is not None:
-                    if model.element.max_occurs == 0:
-                        xsd_element = None
-                    else:
-                        xsd_element = model.element.match(
-                            name, group=self, occurs=model.occurs
-                        )
-
-                    if xsd_element is None:
-                        for particle, occurs, expected in model.advance():
-                            errors.append((index - cdata_index, particle, occurs, expected))
-                        continue
-                    elif isinstance(xsd_element, XsdAnyElement):
-                        value = get_qname(default_namespace, name), value
-
-                    for particle, occurs, expected in model.advance(True):
-                        errors.append((index - cdata_index, particle, occurs, expected))
-                    break
+            while model.element is not None:
+                if model.element.max_occurs == 0:
+                    xsd_element = None
                 else:
-                    if self.suffix and self.suffix.is_matching(name, default_namespace, group=self):
-                        xsd_element = self.suffix
+                    xsd_element = model.element.match(
+                        name, group=self, occurs=model.occurs
+                    )
+
+                if xsd_element is None:
+                    for particle, occurs, expected in model.advance():
+                        errors.append((index - cdata_index, particle, occurs, expected))
+                    continue
+                elif isinstance(xsd_element, XsdAnyElement):
+                    value = get_qname(default_namespace, name), value
+
+                for particle, occurs, expected in model.advance(True):
+                    errors.append((index - cdata_index, particle, occurs, expected))
+                break
+            else:
+                if self.suffix and self.suffix.is_matching(name, default_namespace, group=self):
+                    xsd_element = self.suffix
+                    value = get_qname(default_namespace, name), value
+                else:
+                    errors.append((index - cdata_index, self, 0, []))
+                    xsd_element = self.match_element(name)
+                    if isinstance(xsd_element, XsdAnyElement):
                         value = get_qname(default_namespace, name), value
-                    else:
-                        errors.append((index - cdata_index, self, 0, []))
-                        xsd_element = self.match_element(name)
-                        if isinstance(xsd_element, XsdAnyElement):
-                            value = get_qname(default_namespace, name), value
-                        elif xsd_element is None:
-                            if name.startswith('{') or ':' not in name:
-                                reason = _('{!r} does not match any declared element '
-                                           'of the model group').format(name)
-                            else:
-                                reason = _('{0} has an unknown prefix {1!r}').format(
-                                    name, name.split(':')[0]
-                                )
-                            yield self.validation_error(validation, reason, value, **kwargs)
-                            continue
+                    elif xsd_element is None:
+                        if name.startswith('{') or ':' not in name:
+                            reason = _('{!r} does not match any declared element '
+                                       'of the model group').format(name)
+                        else:
+                            reason = _('{0} has an unknown prefix {1!r}').format(
+                                name, name.split(':')[0]
+                            )
+                        yield self.validation_error(validation, reason, value, **kwargs)
+                        continue
 
             if over_max_depth:
                 continue

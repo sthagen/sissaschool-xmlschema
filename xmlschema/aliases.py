@@ -24,12 +24,12 @@ __all__ = ['ElementType', 'ElementTreeType', 'XMLSourceType', 'NamespacesType',
            'ExtraValidatorType', 'ValidationHookType', 'DecodeType', 'IterDecodeType',
            'JsonDecodeType', 'EncodeType', 'IterEncodeType', 'DecodedValueType',
            'EncodedValueType', 'FillerType', 'DepthFillerType', 'ValueHookType',
-           'ElementHookType', 'UriMapperType']
+           'ElementHookType', 'UriMapperType', 'OccursCounterType']
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from decimal import Decimal
-    from typing import Any, Callable, Dict, List, IO, Iterator, \
+    from pathlib import Path
+    from typing import Any, Callable, Counter, Dict, List, IO, Iterator, \
         MutableMapping, Tuple, Type, Union
     from xml.etree import ElementTree
 
@@ -42,7 +42,8 @@ if TYPE_CHECKING:
     from .converters import ElementData, XMLSchemaConverter
     from .validators import XMLSchemaValidationError, XsdComponent, XMLSchemaBase, \
         XsdComplexType, XsdSimpleType, XsdElement, XsdAnyElement, XsdAttribute, \
-        XsdAnyAttribute, XsdAssert, XsdGroup, XsdAttributeGroup, XsdNotation
+        XsdAnyAttribute, XsdAssert, XsdGroup, XsdAttributeGroup, XsdNotation, \
+        ParticleMixin
 
     ##
     # Type aliases for ElementTree
@@ -75,6 +76,9 @@ if TYPE_CHECKING:
 
     ModelGroupType = XsdGroup
     ModelParticleType = Union[XsdElement, XsdAnyElement, XsdGroup]
+    OccursCounterType = Counter[
+        Union[ParticleMixin, ModelParticleType, Tuple[ModelGroupType], None]
+    ]
     ComponentClassType = Union[None, Type[XsdComponent], Tuple[Type[XsdComponent], ...]]
     XPathElementType = Union[XsdElement, XsdAnyElement, XsdAssert]
 
