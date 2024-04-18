@@ -34,8 +34,9 @@ from .exceptions import XMLSchemaModelError, XMLSchemaModelDepthError, \
 from .xsdbase import ValidationMixin, XsdComponent, XsdType
 from .particles import ParticleMixin, OccursCalculator
 from .elements import XsdElement, XsdAlternative
-from .wildcards import XsdAnyElement, Xsd11AnyElement
-from .models import ModelVisitor, iter_unordered_content, iter_collapsed_content
+from .wildcards import XsdAnyElement, Xsd11AnyElement, XsdOpenContent
+from .models import ModelVisitor, InterleavedModelVisitor, SuffixedModelVisitor, \
+    iter_unordered_content, iter_collapsed_content
 
 if TYPE_CHECKING:
     from .complex_types import XsdComplexType
@@ -95,12 +96,12 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
     parent: Optional[Union['XsdComplexType', 'XsdGroup']]
     model: str
     mixed: bool = False
-    ref: Optional['XsdGroup']
+    ref: Optional['XsdGroup']  # Not None if the instance is a ref to a global group
+    content: List[ModelParticleType]  # Direct access to children also from a ref group
     restriction: Optional['XsdGroup'] = None
 
     # For XSD 1.1 openContent processing
-    interleave: Optional['XsdGroup'] = None  # if openContent with mode='interleave'
-    suffix: Optional[Xsd11AnyElement] = None  # if openContent with mode='suffix'/'interleave'
+    open_content: Optional[XsdOpenContent] = None
 
     _ADMITTED_TAGS = {XSD_GROUP, XSD_SEQUENCE, XSD_ALL, XSD_CHOICE}
 
@@ -109,6 +110,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                  parent: Optional[Union['XsdComplexType', 'XsdGroup']] = None) -> None:
 
         self._group: List[ModelParticleType] = []
+        self.content = self._group
         self.oid = (self,)
         if parent is not None and parent.mixed:
             self.mixed = parent.mixed
@@ -193,6 +195,10 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
             return False
         else:
             return True
+
+    @property
+    def open_content_mode(self) -> str:
+        return 'none' if self.open_content is None else self.open_content.mode
 
     @property
     def effective_min_occurs(self) -> int:
@@ -346,8 +352,11 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         while True:
             for item in particles:
                 if isinstance(item, XsdGroup):
+                    if item.max_occurs == 0:
+                        continue
+
                     iterators.append(particles)
-                    particles = iter(item)
+                    particles = iter(item.content)
                     if len(iterators) > limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(self)
                     break
@@ -453,6 +462,8 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         group.__dict__.update(self.__dict__)
         group.errors = self.errors[:]
         group._group = self._group[:]
+        if self.ref is None:
+            group.content = group._group
         return group
 
     __copy__ = copy
@@ -490,6 +501,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                         self.parse_error(msg)
                 self._group.append(xsd_group)
                 self.ref = xsd_group
+                self.content = xsd_group._group
             else:
                 # Disallowed circular definition, substitute with any content group.
                 msg = _("Circular definition detected for group %r")
@@ -984,7 +996,13 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         xsd_element: Optional[SchemaElementType]
         expected: Optional[List[SchemaElementType]]
 
-        model = ModelVisitor(self.interleave or self)
+        if self.open_content is None:
+            model = ModelVisitor(self)
+        elif self.open_content.mode == 'interleave':
+            model = InterleavedModelVisitor(self, self.open_content.any_element)
+        else:
+            model = SuffixedModelVisitor(self, self.open_content.any_element)
+
         errors = []
         broken_model = False
         namespaces = converter.namespaces
@@ -994,17 +1012,10 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 continue  # child is a comment or PI
 
             converter.set_context(child, level)
-            default_namespace = converter.default_namespace
             name = converter.map_qname(child.tag)
 
             while model.element is not None:
-                if model.element.max_occurs == 0:
-                    xsd_element = None
-                else:
-                    xsd_element = model.element.match(
-                        child.tag, group=self, occurs=model.occurs
-                    )
-
+                xsd_element = model.match_element(child.tag)
                 if xsd_element is None:
                     for particle, occurs, expected in model.advance(False):
                         errors.append((index, particle, occurs, expected))
@@ -1025,17 +1036,13 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                     errors.append((index, particle, occurs, expected))
                 break
             else:
-                if self.suffix is not None and \
-                        self.suffix.is_matching(child.tag, default_namespace, self):
-                    xsd_element = self.suffix
-                else:
-                    xsd_element = self.match_element(child.tag)
-                    if xsd_element is None:
-                        errors.append((index, self, 0, None))
-                        broken_model = True
-                    elif not broken_model:
-                        errors.append((index, xsd_element, 0, []))
-                        broken_model = True
+                xsd_element = self.match_element(child.tag)
+                if xsd_element is None:
+                    errors.append((index, self, 0, None))
+                    broken_model = True
+                elif not broken_model:
+                    errors.append((index, xsd_element, 0, []))
+                    broken_model = True
 
             if xsd_element is None:
                 if kwargs.get('keep_unknown'):
@@ -1068,6 +1075,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
             index = len(obj)
             for particle, occurs, expected in model.stop():
                 errors.append((index, particle, occurs, expected))
+                break
 
         if errors:
             source = kwargs.get('source')
@@ -1113,7 +1121,14 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         converter = kwargs['converter']
         padding = '\n' + ' ' * converter.indent * level
         default_namespace = converter.get('')
-        model = ModelVisitor(self.interleave or self)
+
+        if self.open_content is None:
+            model = ModelVisitor(self)
+        elif self.open_content.mode == 'interleave':
+            model = InterleavedModelVisitor(self, self.open_content.any_element)
+        else:
+            model = SuffixedModelVisitor(self, self.open_content.any_element)
+
         index = cdata_index = 0
         wrong_content_type = False
         over_max_depth = 'max_depth' in kwargs and kwargs['max_depth'] <= level
@@ -1122,7 +1137,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         if not obj.content:
             content = []
         elif isinstance(obj.content, MutableMapping) or kwargs.get('unordered'):
-            content = iter_unordered_content(obj.content, self, default_namespace)
+            content = iter_unordered_content(obj.content, self)
         elif not isinstance(obj.content, MutableSequence):
             wrong_content_type = True
             content = []
@@ -1135,7 +1150,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         elif converter.losslessly:
             content = obj.content
         else:
-            content = iter_collapsed_content(obj.content, self, default_namespace)
+            content = iter_collapsed_content(obj.content, self)
 
         for index, (name, value) in enumerate(content):
             if isinstance(name, int):
@@ -1150,13 +1165,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
 
             xsd_element: Optional[SchemaElementType]
             while model.element is not None:
-                if model.element.max_occurs == 0:
-                    xsd_element = None
-                else:
-                    xsd_element = model.element.match(
-                        name, group=self, occurs=model.occurs
-                    )
-
+                xsd_element = model.match_element(name)
                 if xsd_element is None:
                     for particle, occurs, expected in model.advance():
                         errors.append((index - cdata_index, particle, occurs, expected))
@@ -1168,24 +1177,20 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                     errors.append((index - cdata_index, particle, occurs, expected))
                 break
             else:
-                if self.suffix and self.suffix.is_matching(name, default_namespace, group=self):
-                    xsd_element = self.suffix
+                errors.append((index - cdata_index, self, 0, []))
+                xsd_element = self.match_element(name)
+                if isinstance(xsd_element, XsdAnyElement):
                     value = get_qname(default_namespace, name), value
-                else:
-                    errors.append((index - cdata_index, self, 0, []))
-                    xsd_element = self.match_element(name)
-                    if isinstance(xsd_element, XsdAnyElement):
-                        value = get_qname(default_namespace, name), value
-                    elif xsd_element is None:
-                        if name.startswith('{') or ':' not in name:
-                            reason = _('{!r} does not match any declared element '
-                                       'of the model group').format(name)
-                        else:
-                            reason = _('{0} has an unknown prefix {1!r}').format(
-                                name, name.split(':')[0]
-                            )
-                        yield self.validation_error(validation, reason, value, **kwargs)
-                        continue
+                elif xsd_element is None:
+                    if name.startswith('{') or ':' not in name:
+                        reason = _('{!r} does not match any declared element '
+                                   'of the model group').format(name)
+                    else:
+                        reason = _('{0} has an unknown prefix {1!r}').format(
+                            name, name.split(':')[0]
+                        )
+                    yield self.validation_error(validation, reason, value, **kwargs)
+                    continue
 
             if over_max_depth:
                 continue
@@ -1199,6 +1204,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         if model.element is not None:
             for particle, occurs, expected in model.stop():
                 errors.append((index - cdata_index + 1, particle, occurs, expected))
+                break
 
         if children:
             if children[-1].tail is None:

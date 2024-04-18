@@ -15,6 +15,7 @@ from collections import defaultdict, deque, Counter
 from operator import attrgetter
 from typing import Any, Dict, Iterable, Iterator, List, \
     MutableMapping, MutableSequence, Optional, Tuple, Union
+import warnings
 
 from ..exceptions import XMLSchemaValueError
 from ..aliases import ModelGroupType, ModelParticleType, SchemaElementType, \
@@ -245,12 +246,30 @@ class ModelVisitor:
 
     def iter_group(self) -> Iterator[ModelParticleType]:
         """Returns an iterator for the current model group."""
-        if self.group.max_occurs == 0:
-            return iter(())
-        elif self.group.model != 'all':
-            return iter(self.group)
+        if self.group.model == 'all':
+            for e in self.group.iter_elements():
+                if not e.is_over(self.occurs):
+                    yield e
+        elif self.group.max_occurs == 0:
+            return
         else:
-            return (e for e in self.group.iter_elements() if not e.is_over(self.occurs))
+            yield from self.group.content
+
+    def match_element(self, tag: str) -> Optional[SchemaElementType]:
+        if self.element is None:
+            raise XMLSchemaValueError("cannot match, %r is ended!" % self)
+        elif self.element.max_occurs == 0:
+            return None
+        elif self.element.name is None:
+            return self.element.match(tag, group=self.root, occurs=self.occurs)
+        elif tag == self.element.name:
+            return self.element
+        else:
+            for xsd_element in self.element.iter_substitutes():
+                if tag == xsd_element.name:
+                    return xsd_element
+            else:
+                return None
 
     def advance(self, match: bool = False) -> Iterator[AdvanceYieldedType]:
         """
@@ -314,14 +333,15 @@ class ModelVisitor:
                 item = self.group
                 return stop_item()
 
-            if item is self.group[-1]:
-                for k, item2 in enumerate(self.group, start=1):  # pragma: no cover
+            if item is self.group.content[-1]:
+                for k, item2 in enumerate(self.group.content, start=1):  # pragma: no cover
                     low_occurs = occurs[item2]
                     if not low_occurs:
                         continue
 
                     high_occurs = occurs[item2.oid] or low_occurs
-                    if high_occurs == 1 or any(not x.is_emptiable() for x in self.group[k:]):
+                    if high_occurs == 1 or \
+                            any(not x.is_emptiable() for x in self.group.content[k:]):
                         occurs[self.group] += 1
                         occurs[self.group.oid] += 1
                         break
@@ -353,13 +373,11 @@ class ModelVisitor:
             occurs[item] += 1
             self.match = True
             if self.group.model == 'all':
-                self.items = (e for e in self.group.iter_elements() if not e.is_over(occurs))
-            elif not item.is_over(occurs):
-                return
-            elif self.group.model == 'choice' and item.is_ambiguous():
+                self.items = self.iter_group()
+            elif not item.is_over(occurs) or \
+                    self.group.model == 'choice' and item.is_ambiguous():
                 return
 
-        obj = None
         try:
             if stop_item():
                 yield model_error_tuple()
@@ -369,76 +387,191 @@ class ModelVisitor:
                     item = self.group
                     stop_item()
 
-                obj = next(self.items, None)
-                if isinstance(obj, groups.XsdGroup):
-                    # inner 'sequence' or 'choice' XsdGroup
-                    self._groups.append((self.group, self.items, self.match))
-                    self.group = obj
-                    self.items = self.iter_group()
-                    self.match = False
-                    occurs[obj] = occurs[obj.oid] = 0
-
-                elif obj is not None:
-                    # XsdElement or XsdAnyElement
-                    self.element = obj
-                    if self.group.model == 'sequence':
-                        occurs[obj] = 0
-                    return
-
-                elif not self.match:
-                    if self.group.model == 'all':
-                        if all(e.min_occurs <= occurs[e] for e in self.group.iter_elements()):
-                            occurs[self.group] = 1
-
-                    item = self.group
-                    if stop_item():
-                        yield model_error_tuple()
-
-                elif self.group.model != 'all':
-                    self.items, self.match = self.iter_group(), False
-                elif any(e.min_occurs > occurs[e] for e in self.group.iter_elements()):
-                    if not self.group.min_occurs:
-                        yield self.group, occurs[self.group], self.expected
-                    self.group, self.items, self.match = self._groups.pop()
-                elif any(not e.is_over(occurs) for e in self.group):
-                    self.items = self.iter_group()
-                    self.match = False
+                for obj in self.items:
+                    if isinstance(obj, groups.XsdGroup):
+                        # inner 'sequence' or 'choice' XsdGroup
+                        self._groups.append((self.group, self.items, self.match))
+                        self.group = obj
+                        self.items = self.iter_group()
+                        self.match = False
+                        occurs[obj] = occurs[obj.oid] = 0
+                        break
+                    else:
+                        # XsdElement or XsdAnyElement
+                        self.element = obj
+                        if self.group.model == 'sequence':
+                            occurs[obj] = 0
+                        return
                 else:
-                    occurs[self.group] = 1
+                    if self.match:
+                        self.items, self.match = self.iter_group(), False
+                    elif self.group.model == 'all':
+                        self.group, self.items, self.match = self._groups.pop()
+                    else:
+                        item = self.group
+                        if stop_item():
+                            yield model_error_tuple()
 
         except IndexError:
             # Model visit ended
             self.element = None
-            if self.group.is_missing(occurs):
-                if self.group.model == 'choice':
-                    yield self.group, occurs[self.group], self.expected
-                elif self.group.model == 'sequence':
-                    if obj is not None:
-                        yield self.group, occurs[self.group], self.expected
-                elif any(e.min_occurs > occurs[e] for e in self.group):
-                    yield self.group, occurs[self.group], self.expected
-            elif self.group.max_occurs is not None and self.group.max_occurs < occurs[self.group]:
+            if self.group.model == 'all':
+                yield from self._iter_all_model_errors(occurs)
+            elif self.group.is_missing(occurs) or self.group.is_exceeded(occurs):
                 yield self.group, occurs[self.group], self.expected
+
+    def _iter_all_model_errors(self, occurs: OccursCounterType) -> Iterator[AdvanceYieldedType]:
+        """Validate occurrences in an 'all' model, yielding error tuples."""
+        stack: List[Tuple[groups.XsdGroup, Iterator[ModelParticleType]]] = []
+        group, particles = self.group, iter(self.group)
+        zero_missing: List[Tuple[groups.XsdGroup, ModelParticleType]] = []
+
+        while True:
+            for item in particles:
+                if occurs[item]:
+                    occurs[group] = 1
+
+                if isinstance(item, groups.XsdGroup):
+                    if item.max_occurs == 0:
+                        continue
+
+                    stack.append((group, particles))
+                    particles = iter(item.content)
+                    if len(stack) > limits.MAX_MODEL_DEPTH:
+                        raise XMLSchemaModelDepthError(self.group)
+                    break
+
+                if item.is_missing(occurs) or item.is_exceeded(occurs):
+                    if occurs[item]:
+                        yield item, occurs[item], item.get_expected(occurs)
+                    else:
+                        zero_missing.append((group, item))
+            else:
+                if group.is_missing(occurs) or group.is_exceeded(occurs):
+                    if occurs[group] or not stack:
+                        yield group, occurs[group], group.get_expected(occurs)
+                    else:
+                        zero_missing.append((stack[-1][0], group))
+
+                if not stack:
+                    break
+                group, particles = stack.pop()
+
+        # Late check on missing items that never occurs
+        for group, item in zero_missing:
+            if occurs[group]:
+                yield item, occurs[item], item.get_expected(occurs)
 
     # Kept for backward compatibility
     def iter_unordered_content(
             self, content: EncodedContentType,
             default_namespace: Optional[str] = None) -> Iterator[ContentItemType]:
-        return iter_unordered_content(content, self.root, default_namespace)
+
+        msg = f"{self.__class__.__name__}.iter_unordered_content() method will " \
+              "be removed in v4.0, use iter_unordered_content() function instead."
+        if default_namespace is not None:
+            msg += " Don't provide default_namespace argument, it's ignored."
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+
+        return iter_unordered_content(content, self.root)
 
     def iter_collapsed_content(
             self, content: Iterable[ContentItemType],
             default_namespace: Optional[str] = None) -> Iterator[ContentItemType]:
-        return iter_collapsed_content(content, self.root, default_namespace)
+
+        msg = f"{self.__class__.__name__}.iter_collapsed_content() method will " \
+              "be removed in v4.0, use iter_collapsed_content() function instead."
+        if default_namespace is not None:
+            msg += " Don't provide default_namespace argument, it's ignored."
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+
+        return iter_collapsed_content(content, self.root)
+
+
+class InterleavedModelVisitor(ModelVisitor):
+    """
+    A visitor for openContent interleaved models. Memorizes an internal state
+    for deciding when to advance the model. The model doesn't advance if the
+    last match_element() call is with the wildcard.
+    """
+    __slots__ = 'wildcard', '_advance_model'
+
+    def __init__(self, root: ModelGroupType, wildcard: XsdAnyElement) -> None:
+        super().__init__(root)
+        self.wildcard = wildcard
+        self._advance_model = True
+        if self.element is None:
+            self.element = wildcard
+
+    def clear(self) -> None:
+        super().clear()
+        self._advance_model = True
+        if self.element is None:
+            self.element = self.wildcard
+
+    def match_element(self, tag: str) -> Optional[SchemaElementType]:
+        xsd_element = super().match_element(tag)
+        if xsd_element is not None or self.element is self.wildcard:
+            return xsd_element
+        elif not self.wildcard.is_matching(tag, group=self.root, occurs=self.occurs):
+            return None
+
+        for xsd_element in self.group.iter_elements():
+            if xsd_element.is_matching(tag, group=self.root, occurs=self.occurs):
+                if not xsd_element.is_over(self.occurs):
+                    return None
+        else:
+            if self.wildcard.process_contents != 'strict' or tag in self.root.maps.elements:
+                self._advance_model = False
+                return self.wildcard
+            return None
+
+    def advance(self, match: bool = False) -> Iterator[AdvanceYieldedType]:
+        if self.element is None:
+            yield from super().advance(match)
+        elif self.element is self.wildcard:
+            if not match:
+                self.element = None
+        elif not self._advance_model:
+            self._advance_model = True
+        else:
+            yield from super().advance(match)
+            if self.element is None:
+                self.element = self.wildcard
+
+
+class SuffixedModelVisitor(ModelVisitor):
+    """A visitor for openContent suffixed models."""
+
+    __slots__ = 'wildcard',
+
+    def __init__(self, root: ModelGroupType, wildcard: XsdAnyElement) -> None:
+        super().__init__(root)
+        self.wildcard = wildcard
+        if self.element is None:
+            self.element = wildcard
+
+    def clear(self) -> None:
+        super().clear()
+        if self.element is None:
+            self.element = self.wildcard
+
+    def advance(self, match: bool = False) -> Iterator[AdvanceYieldedType]:
+        if self.element is None:
+            yield from super().advance(match)
+        elif self.element is not self.wildcard:
+            yield from super().advance(match)
+            if self.element is None:
+                self.element = self.wildcard
+        elif not match:
+            self.element = None
 
 
 #
 # Functions for manipulating encoded content
 
-def iter_unordered_content(
-        content: EncodedContentType,
-        group: ModelGroupType,
-        default_namespace: Optional[str] = None) -> Iterator[ContentItemType]:
+def iter_unordered_content(content: EncodedContentType, group: ModelGroupType) \
+        -> Iterator[ContentItemType]:
     """
     Takes an unordered content stored in a dictionary of lists and yields the
     content elements sorted with the ordering defined by the model group. Character
@@ -454,7 +587,6 @@ def iter_unordered_content(
     dictionary the values must be lists where each item is the content \
     of a single element.
     :param group: the model group related to content.
-    :param default_namespace: the default namespace to apply for matching names.
     """
     consumable_content: Dict[str, Any]
 
@@ -504,16 +636,13 @@ def iter_unordered_content(
         yield cdata_content.pop()
 
 
-def sort_content(content: EncodedContentType,
-                 group: ModelGroupType,
-                 default_namespace: Optional[str] = None) -> List[ContentItemType]:
-    return [x for x in iter_unordered_content(content, group, default_namespace)]
+def sort_content(content: EncodedContentType, group: ModelGroupType) \
+        -> List[ContentItemType]:
+    return [x for x in iter_unordered_content(content, group)]
 
 
-def iter_collapsed_content(
-        content: Iterable[ContentItemType],
-        group: ModelGroupType,
-        default_namespace: Optional[str] = None) -> Iterator[ContentItemType]:
+def iter_collapsed_content(content: Iterable[ContentItemType], group: ModelGroupType) \
+        -> Iterator[ContentItemType]:
     """
     Iterates a content stored in a sequence of couples *(name, value)*, yielding
     items in the same order of the sequence, except for repetitions of the same
@@ -523,11 +652,10 @@ def iter_collapsed_content(
 
     This iteration mode, in cooperation with the method *iter_encode* of the class
     XsdGroup, facilitates the encoding of content formatted with a convention that
-    collapses the children with the same tag into a list (eg. BadgerFish).
+    collapses the children with the same tag into a list (e.g. BadgerFish).
 
     :param content: an iterable containing couples of names and values.
     :param group: the model group related to content.
-    :param default_namespace: the default namespace to apply for matching names.
     """
     prev_name = None
     unordered_content: Dict[str, Any] = defaultdict(deque)
@@ -569,7 +697,7 @@ def iter_collapsed_content(
             yield name, value
             prev_name = name
 
-    # Add the remaining consumable content onto the end of the data.
+    # Yields the remaining consumable content after the end of the data.
     for name, values in unordered_content.items():
         for v in values:
             yield name, v
