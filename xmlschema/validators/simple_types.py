@@ -79,12 +79,12 @@ class XsdSimpleType(XsdType, ValidationMixin[Union[str, bytes], DecodedValueType
                  name: Optional[str] = None,
                  facets: Optional[Dict[Optional[str], FacetsValueType]] = None) -> None:
 
-        super(XsdSimpleType, self).__init__(elem, schema, parent, name)
+        super().__init__(elem, schema, parent, name)
         if not hasattr(self, 'facets'):
             self.facets = facets if facets is not None else {}
 
     def __setattr__(self, name: str, value: Any) -> None:
-        super(XsdSimpleType, self).__setattr__(name, value)
+        super().__setattr__(name, value)
         if name == 'facets':
             if not isinstance(self, XsdAtomicBuiltin):
                 self._parse_facets(value)
@@ -511,7 +511,7 @@ class XsdAtomic(XsdSimpleType):
             self.primitive_type = self
         else:
             self.base_type = base_type
-        super(XsdAtomic, self).__init__(elem, schema, parent, name, facets)
+        super().__init__(elem, schema, parent, name, facets)
 
     def __repr__(self) -> str:
         if self.name is None:
@@ -522,7 +522,7 @@ class XsdAtomic(XsdSimpleType):
             return '%s(name=%r)' % (self.__class__.__name__, self.prefixed_name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        super(XsdAtomic, self).__setattr__(name, value)
+        super().__setattr__(name, value)
         if name == 'base_type':
             if not hasattr(self, 'white_space'):
                 try:
@@ -605,7 +605,7 @@ class XsdAtomicBuiltin(XsdAtomic):
                                       "a not empty set of a primitive type")
         self._admitted_facets = admitted_facets
 
-        super(XsdAtomicBuiltin, self).__init__(elem, schema, None, name, facets, base_type)
+        super().__init__(elem, schema, None, name, facets, base_type)
         self.python_type = python_type
         self.to_python = to_python if to_python is not None else python_type
         self.from_python = from_python if from_python is not None else str
@@ -623,7 +623,8 @@ class XsdAtomicBuiltin(XsdAtomic):
             obj = self.normalize(obj)
         elif obj is not None and not isinstance(obj, self.instance_types):
             reason = _("value is not an instance of {!r}").format(self.instance_types)
-            yield XMLSchemaDecodeError(self, obj, self.to_python, reason)
+            error = XMLSchemaDecodeError(self, obj, self.to_python, reason)
+            yield self.validation_error(validation, error, **kwargs)
 
         if validation == 'skip':
             try:
@@ -641,13 +642,14 @@ class XsdAtomicBuiltin(XsdAtomic):
         try:
             result = self.to_python(obj)
         except (ValueError, DecimalException) as err:
-            yield XMLSchemaDecodeError(self, obj, self.to_python, reason=str(err))
+            error = XMLSchemaDecodeError(self, obj, self.to_python, reason=str(err))
+            yield self.validation_error(validation, error, **kwargs)
             yield None
             return
         except TypeError:
             # xs:error type (e.g. an XSD 1.1 type alternative used to catch invalid values)
             reason = _("invalid value {!r}").format(obj)
-            yield self.validation_error(validation, error=reason, obj=obj)
+            yield self.validation_error(validation, reason, obj, **kwargs)
             yield None
             return
 
@@ -672,7 +674,7 @@ class XsdAtomicBuiltin(XsdAtomic):
                         try:
                             if kwargs['source'].namespace != XSD_NAMESPACE:
                                 reason = _("unmapped prefix %r in a QName") % prefix
-                                yield self.validation_error(validation, error=reason, obj=obj)
+                                yield self.validation_error(validation, reason, obj, **kwargs)
                         except KeyError:
                             pass
             else:
@@ -706,7 +708,7 @@ class XsdAtomicBuiltin(XsdAtomic):
                         id_map[obj] = 1
                     else:
                         reason = _("duplicated xs:ID value {!r}").format(obj)
-                        yield self.validation_error(validation, error=reason, obj=obj)
+                        yield self.validation_error(validation, reason, obj, **kwargs)
                 else:
                     if not id_map[obj]:
                         id_map[obj] = 1
@@ -718,7 +720,7 @@ class XsdAtomicBuiltin(XsdAtomic):
 
                     elif obj not in id_list or self.xsd_version == '1.0':
                         reason = _("duplicated xs:ID value {!r}").format(obj)
-                        yield self.validation_error(validation, error=reason, obj=obj)
+                        yield self.validation_error(validation, reason, obj, **kwargs)
 
         yield result
 
@@ -738,12 +740,14 @@ class XsdAtomicBuiltin(XsdAtomic):
             types_: Any = self.instance_types
             if types_ is not bool or (isinstance(types_, tuple) and bool in types_):
                 reason = _("boolean value {0!r} requires a {1!r} decoder").format(obj, bool)
-                yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
+                error = XMLSchemaEncodeError(self, obj, self.from_python, reason)
+                yield self.validation_error(validation, error, **kwargs)
                 obj = self.python_type(obj)
 
         elif not isinstance(obj, self.instance_types):
             reason = _("{0!r} is not an instance of {1!r}").format(obj, self.instance_types)
-            yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
+            error = XMLSchemaEncodeError(self, obj, self.from_python, reason)
+            yield self.validation_error(validation, error, **kwargs)
 
             try:
                 value = self.python_type(obj)
@@ -752,7 +756,8 @@ class XsdAtomicBuiltin(XsdAtomic):
                     raise ValueError()
                 obj = value
             except (ValueError, TypeError) as err:
-                yield XMLSchemaEncodeError(self, obj, self.from_python, reason=str(err))
+                error = XMLSchemaEncodeError(self, obj, self.from_python, reason=str(err))
+                yield self.validation_error(validation, error, **kwargs)
                 yield None
                 return
             else:
@@ -760,7 +765,8 @@ class XsdAtomicBuiltin(XsdAtomic):
                     obj = value
                 else:
                     reason = _("invalid value {!r}").format(obj)
-                    yield XMLSchemaEncodeError(self, obj, self.from_python, reason)
+                    error = XMLSchemaEncodeError(self, obj, self.from_python, reason)
+                    yield self.validation_error(validation, error, **kwargs)
                     yield None
                     return
 
@@ -773,7 +779,8 @@ class XsdAtomicBuiltin(XsdAtomic):
         try:
             text = self.from_python(obj)
         except ValueError as err:
-            yield XMLSchemaEncodeError(self, obj, self.from_python, reason=str(err))
+            error = XMLSchemaEncodeError(self, obj, self.from_python, reason=str(err))
+            yield self.validation_error(validation, error, **kwargs)
             yield None
         else:
             if self.patterns is not None:
@@ -809,7 +816,7 @@ class XsdList(XsdSimpleType):
         facets: Optional[Dict[Optional[str], FacetsValueType]] = {
             XSD_WHITE_SPACE: XsdWhiteSpaceFacet(self._white_space_elem, schema, self, self)
         }
-        super(XsdList, self).__init__(elem, schema, parent, name, facets)
+        super().__init__(elem, schema, parent, name, facets)
 
     def __repr__(self) -> str:
         if self.name is None:
@@ -822,10 +829,10 @@ class XsdList(XsdSimpleType):
             if value.tag == XSD_SIMPLE_TYPE:
                 for child in value:
                     if child.tag == XSD_LIST:
-                        super(XsdList, self).__setattr__(name, child)
+                        super().__setattr__(name, child)
                         return
             raise XMLSchemaValueError(
-                "a {0!r} definition required for {1!r}".format(XSD_LIST, self)
+                f"a {XSD_LIST!r} definition required for {self!r}"
             )
         elif name == 'item_type':
             if not value.is_atomic():
@@ -834,7 +841,7 @@ class XsdList(XsdSimpleType):
                 )
         elif name == 'white_space' and value is None:
             value = 'collapse'
-        super(XsdList, self).__setattr__(name, value)
+        super().__setattr__(name, value)
 
     def _parse(self) -> None:
         item_type: Any
@@ -983,7 +990,7 @@ class XsdUnion(XsdSimpleType):
                  schema: SchemaType,
                  parent: Optional[XsdComponent],
                  name: Optional[str] = None) -> None:
-        super(XsdUnion, self).__init__(elem, schema, parent, name, facets=None)
+        super().__init__(elem, schema, parent, name, facets=None)
 
     def __repr__(self) -> str:
         if self.name is None:
@@ -996,10 +1003,10 @@ class XsdUnion(XsdSimpleType):
             if value.tag == XSD_SIMPLE_TYPE:
                 for child in value:
                     if child.tag == XSD_UNION:
-                        super(XsdUnion, self).__setattr__(name, child)
+                        super().__setattr__(name, child)
                         return
             raise XMLSchemaValueError(
-                "a {0!r} definition required for {1!r}".format(XSD_UNION, self)
+                f"a {XSD_UNION!r} definition required for {self!r}"
             )
 
         elif name == 'white_space':
@@ -1007,7 +1014,7 @@ class XsdUnion(XsdSimpleType):
                 msg = _("wrong value %r for attribute 'white_space'")
                 raise XMLSchemaValueError(msg % value)
             value = 'collapse'
-        super(XsdUnion, self).__setattr__(name, value)
+        super().__setattr__(name, value)
 
     def _parse(self) -> None:
         mt: Any
@@ -1118,7 +1125,8 @@ class XsdUnion(XsdSimpleType):
 
         if not isinstance(obj, str) or ' ' not in obj.strip():
             reason = _("invalid value {!r}").format(obj)
-            yield XMLSchemaDecodeError(self, obj, self.member_types, reason)
+            error = XMLSchemaDecodeError(self, obj, self.member_types, reason)
+            yield self.validation_error(validation, error, **kwargs)
             return
 
         items = []
@@ -1140,7 +1148,8 @@ class XsdUnion(XsdSimpleType):
 
         if not_decodable:
             reason = _("no type suitable for decoding the values %r") % not_decodable
-            yield XMLSchemaDecodeError(self, obj, self.member_types, reason)
+            error = XMLSchemaDecodeError(self, obj, self.member_types, reason)
+            yield self.validation_error(validation, error, **kwargs)
 
         yield items if len(items) > 1 else items[0] if items else None
 
@@ -1174,7 +1183,8 @@ class XsdUnion(XsdSimpleType):
 
         if validation != 'skip':
             reason = _("no type suitable for encoding the object")
-            yield XMLSchemaEncodeError(self, obj, self.member_types, reason)
+            error = XMLSchemaEncodeError(self, obj, self.member_types, reason)
+            yield self.validation_error(validation, error, **kwargs)
             yield None
         else:
             yield str(obj)
@@ -1210,7 +1220,7 @@ class XsdAtomicRestriction(XsdAtomic):
                     raise XMLSchemaValueError(
                         "an xs:restriction definition required for %r." % self
                     )
-        super(XsdAtomicRestriction, self).__setattr__(name, value)
+        super().__setattr__(name, value)
 
     def _parse(self) -> None:
         elem = self.elem

@@ -125,7 +125,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         if not build:
             self._build = False
         self.selected_by = set()
-        super(XsdElement, self).__init__(elem, schema, parent)
+        super().__init__(elem, schema, parent)
 
     def __repr__(self) -> str:
         return '%s(%s=%r, occurs=%r)' % (
@@ -141,7 +141,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 self.attributes = self.schema.create_empty_attribute_group(self)
             else:
                 self.attributes = value.attributes
-        super(XsdElement, self).__setattr__(name, value)
+        super().__setattr__(name, value)
 
     def __iter__(self) -> Iterator[SchemaElementType]:
         if self.type.has_complex_content():
@@ -183,8 +183,8 @@ class XsdElement(XsdComponent, ParticleMixin,
                 self.alternatives = xsd_element.alternatives
                 self.selected_by = xsd_element.selected_by
 
-            for attr_name in {'type', 'nillable', 'default', 'fixed', 'form',
-                              'block', 'abstract', 'final', 'substitutionGroup'}:
+            for attr_name in ('type', 'nillable', 'default', 'fixed', 'form',
+                              'block', 'abstract', 'final', 'substitutionGroup'):
                 if attr_name in attrib:
                     msg = _("attribute {!r} is not allowed when element reference is used")
                     self.parse_error(msg.format(attr_name))
@@ -209,7 +209,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             if self.parent is not None:
                 msg = _("local scope elements cannot have abstract attribute")
                 self.parse_error(msg)
-            if attrib['abstract'].strip() in {'true', '1'}:
+            if attrib['abstract'].strip() in ('true', '1'):
                 self.abstract = True
 
         if 'block' in attrib:
@@ -220,7 +220,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             except ValueError as err:
                 self.parse_error(err)
 
-        if 'nillable' in attrib and attrib['nillable'].strip() in {'true', '1'}:
+        if 'nillable' in attrib and attrib['nillable'].strip() in ('true', '1'):
             self.nillable = True
 
         if self.parent is None:
@@ -232,12 +232,12 @@ class XsdElement(XsdComponent, ParticleMixin,
                 except ValueError as err:
                     self.parse_error(err)
 
-            for attr_name in {'ref', 'form', 'minOccurs', 'maxOccurs'}:
+            for attr_name in ('ref', 'form', 'minOccurs', 'maxOccurs'):
                 if attr_name in attrib:
                     msg = _("attribute {!r} is not allowed in a global element declaration")
                     self.parse_error(msg.format(attr_name))
         else:
-            for attr_name in {'final', 'substitutionGroup'}:
+            for attr_name in ('final', 'substitutionGroup'):
                 if attr_name in attrib:
                     msg = _("attribute {!r} not allowed in a local element declaration")
                     self.parse_error(msg.format(attr_name))
@@ -577,7 +577,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 yield self.validation_error(validation, err, elem, **options)
             except XMLSchemaParseError as err:
                 yield self.validation_error(validation, err.message, elem, **options)
-            except (OSError, IOError):
+            except OSError:
                 continue
 
     def iter_decode(self, obj: ElementType, validation: str = 'lax', **kwargs: Any) \
@@ -607,6 +607,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 else:
                     return
 
+        kwargs['elem'] = obj
         try:
             level = kwargs['level']
         except KeyError:
@@ -858,7 +859,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             for identity in self.identities:
                 identities[identity].enabled = False
 
-    def collect_key_fields(self, elem: ElementType, xsd_type: BaseXsdType,
+    def collect_key_fields(self, obj: ElementType, xsd_type: BaseXsdType,
                            validation: str = 'lax', nilled: bool = False,
                            **kwargs: Any) -> Iterator[XMLSchemaValidationError]:
         element_node: Union[ElementNode, LazyElementNode]
@@ -876,7 +877,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         except KeyError:
             namespaces = None
 
-        element_node = resource.get_xpath_node(elem)
+        element_node = resource.get_xpath_node(obj)
 
         xsd_element = self if self.ref is None else self.ref
         if xsd_element.type is not xsd_type:
@@ -900,7 +901,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 assert identity.selector is not None and identity.selector.token is not None
                 counter.elements = set(identity.selector.token.select_results(context))
 
-            if elem not in counter.elements:
+            if obj not in counter.elements:
                 continue
 
             try:
@@ -918,13 +919,13 @@ class XsdElement(XsdComponent, ParticleMixin,
                 decoders = cast(Tuple[XsdAttribute, ...], xsd_fields)
                 fields = identity.get_fields(element_node, namespaces, decoders=decoders)
             except (XMLSchemaValueError, XMLSchemaTypeError) as err:
-                yield self.validation_error(validation, err, elem, **kwargs)
+                yield self.validation_error(validation, err, obj, **kwargs)
             else:
                 if any(x is not None for x in fields) or nilled:
                     try:
                         counter.increase(fields)
                     except ValueError as err:
-                        yield self.validation_error(validation, err, elem, **kwargs)
+                        yield self.validation_error(validation, err, obj, **kwargs)
 
     def to_objects(self, obj: ElementType, with_bindings: bool = False, **kwargs: Any) \
             -> DecodeType['dataobjects.DataElement']:
@@ -1020,7 +1021,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             xsi_nil = element_data.attributes[XSI_NIL].strip()
             if not self.nillable:
                 errors.append("element is not nillable.")
-            elif xsi_nil not in {'0', '1', 'true', 'false'}:
+            elif xsi_nil not in ('0', '1', 'true', 'false'):
                 errors.append("xsi:nil attribute must has a boolean value.")
             elif xsi_nil in ('0', 'false'):
                 pass
@@ -1088,7 +1089,6 @@ class XsdElement(XsdComponent, ParticleMixin,
             name = f'{{{default_namespace}}}{name}'
 
             # Workaround for backward compatibility of XPath selectors on schemas.
-            # It could be removed in v3.0.
             if not self.qualified and default_namespace == self.target_namespace:
                 return (name == self.qualified_name or
                         any(name == e.qualified_name for e in self.iter_substitutes()))
@@ -1465,7 +1465,7 @@ class Xsd11Element(XsdElement):
                 yield self.validation_error(validation, err, elem, **options)
             except XMLSchemaParseError as err:
                 yield self.validation_error(validation, err.message, elem, **options)
-            except (OSError, IOError):
+            except OSError:
                 continue
 
 
@@ -1489,7 +1489,7 @@ class XsdAlternative(XsdComponent):
     _ADMITTED_TAGS = {XSD_ALTERNATIVE}
 
     def __init__(self, elem: ElementType, schema: SchemaType, parent: XsdElement) -> None:
-        super(XsdAlternative, self).__init__(elem, schema, parent)
+        super().__init__(elem, schema, parent)
 
     def __repr__(self) -> str:
         return '%s(type=%r, test=%r)' % (
