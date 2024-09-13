@@ -12,7 +12,6 @@ import unittest
 import os
 import pathlib
 import platform
-import sys
 
 from urllib.parse import urlsplit, uses_relative
 from pathlib import Path, PurePath, PureWindowsPath, PurePosixPath
@@ -52,6 +51,18 @@ def filter_windows_path(path):
         return '/' + path
     else:
         return path
+
+
+def has_fix_for_issue_67673():
+    """
+    Checks if urlunsplit() has the fix for URIs with path starting with multiple
+    slashes and no authority.
+
+      https://github.com/python/cpython/issues/67693
+      https://github.com/python/cpython/commit/2fa5d70
+    """
+    unc_path = '////netloc/path/file.txt'
+    return urlsplit(unc_path).geturl() == unc_path
 
 
 class TestLocations(unittest.TestCase):
@@ -281,7 +292,7 @@ class TestLocations(unittest.TestCase):
             self.assertEqual(url, 'file:////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
 
             url = normalize_url(r'dev\XMLSCHEMA\test.xsd', base_url=base_url_host_in_path)
-            if sys.version_info < (3, 12, 4):
+            if not has_fix_for_issue_67673():
                 self.assertEqual(url, 'file:////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
             else:
                 self.assertEqual(url, 'file://////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
@@ -298,7 +309,7 @@ class TestLocations(unittest.TestCase):
             self.assertEqual(url, 'file:////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
 
             url = normalize_url(r'dev/XMLSCHEMA/test.xsd', base_url=base_url_host_in_path)
-            if sys.version_info < (3, 12, 4):
+            if not has_fix_for_issue_67673():
                 self.assertEqual(url, 'file:////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
             else:
                 self.assertEqual(url, 'file://////filer01/MY_HOME/dev/XMLSCHEMA/test.xsd')
@@ -318,7 +329,7 @@ class TestLocations(unittest.TestCase):
         self.assertRegex(normalize_url('/root/dir1/schema.xsd'),
                          f'file://{DRIVE_REGEX}/root/dir1/schema.xsd')
 
-        if sys.version_info < (3, 12, 4):
+        if not has_fix_for_issue_67673():
             self.assertRegex(normalize_url('////root/dir1/schema.xsd'),
                              f'file://{DRIVE_REGEX}//root/dir1/schema.xsd')
             self.assertRegex(normalize_url('dir2/schema.xsd', '////root/dir1'),
