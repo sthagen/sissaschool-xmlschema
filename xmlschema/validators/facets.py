@@ -596,7 +596,7 @@ class XsdExplicitTimezoneFacet(XsdFacet):
             self.invalid_type_error(err, value)
 
 
-class XsdEnumerationFacets(MutableSequence[ElementType], XsdFacet):
+class XsdEnumerationFacets(XsdFacet, MutableSequence[ElementType]):
     """
     Sequence of XSD *enumeration* facets. Values are validates if match any of enumeration values.
 
@@ -610,11 +610,13 @@ class XsdEnumerationFacets(MutableSequence[ElementType], XsdFacet):
     base_type: BaseXsdType
     _ADMITTED_TAGS = XSD_ENUMERATION,
 
+    __slots__ = ('_elements', 'enumeration')
+
     def __init__(self, elem: ElementType,
                  schema: SchemaType,
                  parent: 'XsdAtomicRestriction',
                  base_type: BaseXsdType) -> None:
-        XsdFacet.__init__(self, elem, schema, parent, base_type)
+        super().__init__(elem, schema, parent, base_type)
         self.validate = self.__call__
 
     def _parse(self) -> None:
@@ -714,7 +716,7 @@ class XsdEnumerationFacets(MutableSequence[ElementType], XsdFacet):
         return None
 
 
-class XsdPatternFacets(MutableSequence[ElementType], XsdFacet):
+class XsdPatternFacets(XsdFacet, MutableSequence[ElementType]):
     """
     Sequence of XSD *pattern* facets. Values are validates if match any of patterns.
 
@@ -728,11 +730,18 @@ class XsdPatternFacets(MutableSequence[ElementType], XsdFacet):
     _ADMITTED_TAGS = XSD_PATTERN,
     patterns: list[re.Pattern[str]]
 
+    # XSD pattern translation options
+    back_references = False
+    lazy_quantifiers = False
+    anchors = False
+
+    __slots__ = ('_elements', 'patterns')
+
     def __init__(self, elem: ElementType,
                  schema: SchemaType,
                  parent: 'XsdAtomicRestriction',
                  base_type: Optional[BaseXsdType]) -> None:
-        XsdFacet.__init__(self, elem, schema, parent, base_type)
+        super().__init__(elem, schema, parent, base_type)
         self.validate = self.__call__
 
     def _parse(self) -> None:
@@ -744,9 +753,9 @@ class XsdPatternFacets(MutableSequence[ElementType], XsdFacet):
             python_pattern = translate_pattern(
                 pattern=elem.attrib['value'],
                 xsd_version=self.xsd_version,
-                back_references=False,
-                lazy_quantifiers=False,
-                anchors=False
+                back_references=self.back_references,
+                lazy_quantifiers=self.lazy_quantifiers,
+                anchors=self.anchors,
             )
             return re.compile(python_pattern)
         except KeyError:

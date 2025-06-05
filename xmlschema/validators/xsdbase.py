@@ -18,13 +18,14 @@ from typing import TYPE_CHECKING, cast, Any, Optional, Union
 from elementpath import select
 from elementpath.etree import etree_tostring
 
-from xmlschema.exceptions import XMLSchemaValueError, XMLSchemaTypeError
+from xmlschema.exceptions import XMLSchemaTypeError
 from xmlschema.names import XSD_ANNOTATION, XSD_APPINFO, XSD_DOCUMENTATION, \
     XSD_ANY_TYPE, XSD_ANY_SIMPLE_TYPE, XSD_ANY_ATOMIC_TYPE, XSD_BOOLEAN, XSD_ID, \
     XSD_QNAME, XSD_OVERRIDE, XSD_NOTATION_TYPE, XSD_DECIMAL, XMLNS_NAMESPACE
 from xmlschema.aliases import ElementType, NsmapType, SchemaType, BaseXsdType, \
-    ComponentClassType, DecodedValueType
+    ComponentClassType, DecodedValueType, ModelParticleType
 from xmlschema.translation import gettext as _
+from xmlschema.exceptions import XMLSchemaValueError
 from xmlschema.utils.qnames import get_qname, local_name, get_prefixed_qname
 from xmlschema.utils.etree import is_etree_element
 from xmlschema.utils.logger import format_xmlschema_stack, dump_data
@@ -74,10 +75,12 @@ class XsdValidator:
 
     @property
     def built(self) -> bool:
+        """Defines whether the XSD validator has been fully parsed and built"""
+        raise NotImplementedError()
+
+    def build(self) -> None:
         """
-        Property that is ``True`` if XSD validator has been fully parsed and built,
-        ``False`` otherwise. For schemas the property is checked on all global
-        components. For XSD components check only the building of local subcomponents.
+        Build the validator and its components. Do nothing if the validator is already built.
         """
         raise NotImplementedError()
 
@@ -103,9 +106,9 @@ class XsdValidator:
         """
         if self.validation == 'skip':
             return 'notKnown'
-        elif self.errors or any(comp.errors for comp in self.iter_components()):
+        elif self.errors:
             return 'invalid'
-        elif self.built:
+        elif self.validation_attempted == 'full':
             return 'valid'
         else:
             return 'notKnown'
@@ -262,9 +265,6 @@ class XsdComponent(XsdValidator):
     has the schema as parent.
     :param name: name of the component, maybe overwritten by the parse of the `elem` argument.
 
-    :cvar qualified: for name matching, unqualified matching may be admitted only \
-    for elements and attributes.
-    :vartype qualified: bool
     """
     @classmethod
     def meta_tag(cls) -> str:
@@ -278,13 +278,14 @@ class XsdComponent(XsdValidator):
 
     maps: 'XsdGlobals'
     elem: ElementType
-    qualified = True
+    qualified: bool = True
+    """For name matching, unqualified matching may be admitted only for elements and attributes"""
+
     ref: Optional['XsdComponent']
     redefine: Optional['XsdComponent']
-    _built: bool = False  # marks whether the build() method has been called
 
     __slots__ = ('name', 'parent', 'schema', 'xsd_version', 'target_namespace', 'maps',
-                 'builders', 'elem', 'validation', 'errors', 'ref', 'redefine')
+                 'builders', 'elem', 'validation', 'errors', 'ref', 'redefine', '_built')
 
     def __init__(self, elem: ElementType,
                  schema: SchemaType,
@@ -292,6 +293,7 @@ class XsdComponent(XsdValidator):
                  name: Optional[str] = None) -> None:
 
         super().__init__(schema.validation)
+        self._built = False
         self.ref = self.redefine = None
         self.name = name
         self.parent = parent
@@ -318,6 +320,17 @@ class XsdComponent(XsdValidator):
 
         component.errors = self.errors.copy()
         return component
+
+    @property
+    def built(self) -> bool:
+        return self._built
+
+    def build(self) -> None:
+        self._built = True
+
+    @property
+    def validation_attempted(self) -> str:
+        return 'full' if self._built else 'partial'
 
     def is_global(self) -> bool:
         """Returns `True` if the instance is a global component, `False` if it's local."""
@@ -547,20 +560,6 @@ class XsdComponent(XsdValidator):
         """The ``'id'`` attribute of the component tag, ``None`` if missing."""
         return self.elem.get('id')
 
-    @property
-    def validation_attempted(self) -> str:
-        return 'full' if self.built else 'partial'
-
-    def build(self) -> None:
-        """
-        Builds components that are not fully parsed at initialization, like model groups
-        or internal local elements in model groups, otherwise does nothing.
-        """
-
-    @property
-    def built(self) -> bool:
-        return self._built
-
     def is_matching(self, name: Optional[str], default_namespace: Optional[str] = None,
                     **kwargs: Any) -> bool:
         """
@@ -752,6 +751,7 @@ class XsdType(XsdComponent):
     base_type: Optional[BaseXsdType] = None
     derivation: Optional[str] = None
     _final: Optional[str] = None
+    ref: Optional[BaseXsdType]
 
     @property
     def final(self) -> str:
@@ -759,7 +759,9 @@ class XsdType(XsdComponent):
 
     @property
     def content_type_label(self) -> str:
-        """The content type classification."""
+        """
+        The content type classification. Can be 'simple', 'mixed', 'element-only' or 'empty'.
+        """
         raise NotImplementedError()
 
     @property
@@ -913,3 +915,17 @@ class XsdType(XsdComponent):
 
     def text_is_valid(self, text: str, context: Optional[DecodeContext] = None) -> bool:
         raise NotImplementedError()
+
+    def overall_min_occurs(self, particle: ModelParticleType) -> int:
+        """Returns the overall minimum for occurrences of a content model particle."""
+        content = self.model_group
+        if content is None or self.is_empty():
+            raise XMLSchemaTypeError(_("content type must be 'element-only' or 'mixed'"))
+        return content.overall_min_occurs(particle)
+
+    def overall_max_occurs(self, particle: ModelParticleType) -> Optional[int]:
+        """Returns the overall maximum for occurrences of a content model particle."""
+        content = self.model_group
+        if content is None or self.is_empty():
+            raise XMLSchemaTypeError(_("content must type be 'element-only' or 'mixed'"))
+        return content.overall_max_occurs(particle)

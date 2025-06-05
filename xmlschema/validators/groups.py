@@ -373,19 +373,30 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
 
     def get_subgroups(self, particle: ModelParticleType) -> list['XsdGroup']:
         """
-        Returns a list of the groups that represent the path to the enclosed particle.
-        Raises an `XMLSchemaModelError` if the argument is not a particle of the model
-        group.
+        Returns a list of the groups that represent the first path to the enclosed particle.
+        Raises an `XMLSchemaModelError` if the argument is not a particle of the model group.
+        """
+        for subgroups in self.iter_subgroups(particle):
+            return subgroups
+        else:
+            return []
+
+    def iter_subgroups(self, particle: ModelParticleType) -> Iterator[list['XsdGroup']]:
+        """
+        Iterates all subgroups where the provided particle is present.
+        Raises an `XMLSchemaModelError` if the argument is not a particle of the model group.
         """
         subgroups: list[tuple[XsdGroup, Iterator[ModelParticleType]]] = []
         group, children = self, iter(self if self.ref is None else self.ref)
+        found = False
 
         while True:
             for child in children:
                 if child is particle:
+                    found = True
                     _subgroups = [x[0] for x in subgroups]
                     _subgroups.append(group)
-                    return _subgroups
+                    yield _subgroups
                 elif isinstance(child, XsdGroup):
                     if len(subgroups) > limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(self)
@@ -396,8 +407,10 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
                 try:
                     group, children = subgroups.pop()
                 except IndexError:
-                    msg = _('{!r} is not a particle of the model group')
-                    raise XMLSchemaModelError(self, msg.format(particle)) from None
+                    if not found:
+                        msg = _('{!r} is not a particle of the model group')
+                        raise XMLSchemaModelError(self, msg.format(particle)) from None
+                    return
 
     def get_model_visitor(self) -> ModelVisitor:
         if self.open_content is None or self.open_content.mode == 'none':
@@ -560,8 +573,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
             if child.tag == XSD_ANNOTATION or callable(child.tag):
                 continue
             elif child.tag == XSD_ELEMENT:
-                # Builds inner elements later, for avoid circularity.
-                self.append(self.builders.element_class(child, self.schema, self, False))
+                self.append(self.builders.element_class(child, self.schema, self))
             elif content_model.tag == XSD_ALL:
                 self.parse_error(_("'all' model can contain only elements"))
             elif child.tag == XSD_ANY:
@@ -600,6 +612,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
     def build(self) -> None:
         if self._built:
             return
+        self._built = True
 
         for item in self._group:
             if isinstance(item, XsdElement):
@@ -608,38 +621,6 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         if self.redefine is not None:
             for group in self.redefine.iter_components(XsdGroup):
                 group.build()
-
-        self._built = True
-
-    @property
-    def built(self) -> bool:
-        if not self._built:
-            return False
-
-        for item in self:
-            if isinstance(item, XsdElement):
-                if not item.built:
-                    return False
-            elif isinstance(item, XsdAnyElement):
-                continue
-            elif item.parent is None:
-                continue
-            elif item.parent is not self.parent and \
-                    isinstance(item.parent, XsdType) and item.parent.parent is None:
-                continue
-            elif not item.ref and not item.built:
-                return False
-
-        return True if hasattr(self, 'model') and self.model else False
-
-    @property
-    def validation_attempted(self) -> str:
-        if self.built:
-            return 'full'
-        elif any(item.validation_attempted == 'partial' for item in self):
-            return 'partial'
-        else:
-            return 'none'
 
     @property
     def schema_elem(self) -> ElementType:
@@ -1091,7 +1072,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         Encode data to a list containing Element children.
 
         :param obj: an ElementData instance.
-        :param validation: the validation mode. Can be 'lax', 'strict' or 'skip.
+        :param validation: the validation mode. Can be 'lax', 'strict' or 'skip'.
         :param context: the encoding context.
         :return: returns a couple with the text of the Element and a list of child \
         elements.
@@ -1245,8 +1226,7 @@ class Xsd11Group(XsdGroup):
 
         for child in content_model:
             if child.tag == XSD_ELEMENT:
-                # Builds inner elements later, for avoid circularity.
-                self.append(self.builders.element_class(child, self.schema, self, False))
+                self.append(self.builders.element_class(child, self.schema, self))
             elif child.tag == XSD_ANY:
                 self._group.append(self.builders.any_element_class(child, self.schema, self))
             elif child.tag in (XSD_SEQUENCE, XSD_CHOICE, XSD_ALL):

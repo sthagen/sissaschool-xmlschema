@@ -519,14 +519,6 @@ class XsdComplexType(XsdType, ValidationMixin[Union[ElementType, str, bytes], An
         return self.schema.block_default if self._block is None else self._block
 
     @property
-    def built(self) -> bool:
-        return self.content.parent is not None or self.content.built
-
-    @property
-    def validation_attempted(self) -> str:
-        return 'full' if self.built else self.content.validation_attempted
-
-    @property
     def simple_type(self) -> Optional[XsdSimpleType]:
         return self.content if isinstance(self.content, XsdSimpleType) else None
 
@@ -659,21 +651,19 @@ class XsdComplexType(XsdType, ValidationMixin[Union[ElementType, str, bytes], An
             return self.mixed or self.base_type is not None and \
                 self.base_type.is_valid(obj, **kwargs)
 
-    def is_derived(self, other: Union[BaseXsdType, tuple[ElementType, SchemaType]],
-                   derivation: Optional[str] = None) -> bool:
+    def is_derived(self, other: BaseXsdType, derivation: Optional[str] = None) -> bool:
         if derivation and derivation == self.derivation:
             derivation = None  # derivation mode checked
 
-        if self is other:
-            return derivation is None
-        elif isinstance(other, tuple):
-            msg = _("global type {!r} is not built")
-            other[1].parse_error(msg.format(other[0].tag))
-            return False
-        elif other.name == XSD_ANY_TYPE:
+        if other.ref is not None:
+            other = other.ref
+
+        if self is other or self.ref is other:
             return True
+        elif other.name == XSD_ANY_TYPE:
+            return derivation != 'extension'
         elif self.base_type is other:
-            return derivation is None  # or self.base_type.derivation == derivation
+            return derivation is None
         elif isinstance(other, XsdUnion):
             return any(self.is_derived(m, derivation) for m in other.member_types)
         elif self.base_type is None:

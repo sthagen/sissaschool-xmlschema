@@ -37,7 +37,7 @@ from xmlschema.testing import SKIP_REMOTE_TESTS, XMLSchemaTestCase, run_xmlschem
 from xmlschema.utils.urls import normalize_url
 from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError, \
     XMLResourceForbidden, XMLResourceBlocked, XMLResourceOSError
-from xmlschema.resources import XMLResourceManager
+from xmlschema.resources import XMLResourceManager, iterfind_parser
 from xmlschema.resources.sax import defuse_xml
 
 DRIVE_REGEX = '(/[a-zA-Z]:|/)' if platform.system() == 'Windows' else ''
@@ -380,7 +380,9 @@ class TestResources(XMLSchemaTestCase):
         with self.assertRaises(ElementTree.ParseError) as ctx:
             XMLResource(invalid_xml)
 
-        self.assertEqual(str(ctx.exception), 'unbound prefix: line 1, column 0')
+        self.assertEqual(
+            str(ctx.exception), 'invalid XML syntax: unbound prefix: line 1, column 0'
+        )
 
     def test_xml_resource_from_string_io(self):
         with open(self.vh_xsd_file) as schema_file:
@@ -999,6 +1001,24 @@ class TestResources(XMLSchemaTestCase):
 
         self.assertListEqual(resource.findall('*/*'), root[0][:])
         self.assertListEqual(resource.findall('*/c3'), [])
+
+    def test_iterfind_parser(self):
+        source = StringIO('<a><b1 x="9"><c1/><c2 x="2"/></b1><b2/></a>')
+
+        parser = iterfind_parser('/a/b2')
+        resource = XMLResource(source, iterparse=parser)
+        tags = [e.tag for e in resource.iter()]
+        self.assertListEqual(tags, ['a', 'b1', 'b2'])
+
+        parser = iterfind_parser('/a/b2', ancestors=[])
+        resource = XMLResource(source, iterparse=parser)
+        tags = [e.tag for e in resource.iter()]
+        self.assertListEqual(tags, ['a', 'b2'])
+
+        parser = iterfind_parser('./b2')
+        resource = XMLResource(source, iterparse=parser)
+        tags = [e.tag for e in resource.iter()]
+        self.assertListEqual(tags, ['a', 'b1', 'b2'])
 
     def test_xml_resource_nsmap_tracking(self):
         xsd_file = self.casepath('examples/collection/collection4.xsd')

@@ -42,7 +42,6 @@ from xmlschema.translation import gettext as _
 from xmlschema.utils.decoding import Empty
 from xmlschema.utils.logger import set_logging_level
 from xmlschema.utils.etree import prune_etree, is_etree_element
-from xmlschema.utils.misc import deprecated
 from xmlschema.utils.qnames import get_namespace_ext
 from xmlschema.utils.urls import is_local_url, normalize_url
 from xmlschema.resources import XMLResource
@@ -69,7 +68,7 @@ from .complex_types import XsdComplexType
 from .groups import XsdGroup
 from .elements import XsdElement
 from .wildcards import XsdAnyElement, XsdDefaultOpenContent
-from .builders import XsdBuilders
+from .builders import GLOBAL_TAGS, XsdBuilders
 from .xsd_globals import XsdGlobals
 
 logger = logging.getLogger('xmlschema')
@@ -192,7 +191,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     :param opener: an optional :class:`OpenerDirector` instance used for opening XML \
     resources. For default uses the opener installed globally for *urlopen*.
     :param iterparse: an optional callable that returns an iterator parser instance \
-    used for building the XML tree. For default *ElementTree.iterparse* is used.
+    used for building the XML trees. For default *ElementTree.iterparse* is used.
     :param use_fallback: if `True` the schema processor uses the validator fallback \
     location hints to load well-known namespaces (e.g. xhtml).
     :param use_xpath3: if `True` an XSD 1.1 schema instance uses the XPath 3 processor \
@@ -644,9 +643,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     @property
     def allow(self) -> str:
-        """
-        The resource access security mode: can be 'all', 'remote', 'local' or 'sandbox'.
-        """
+        """The resource access security mode: can be 'all', 'remote', 'local' or 'sandbox'."""
         return self.source.allow
 
     @property
@@ -752,20 +749,6 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
         cls.meta_schema.maps.build()
         return cls.meta_schema.types
-
-    @deprecated('5.0', alt="use XMLSchemaBase.builders.create_any_content_group instead")
-    def create_any_content_group(self, parent: Union[XsdComplexType, XsdGroup],
-                                 any_element: Optional[XsdAnyElement] = None) -> XsdGroup:
-        return self.builders.create_any_content_group(parent, any_element)
-
-    @deprecated('5.0', alt="use XMLSchemaBase.builders.create_any_attribute_group instead")
-    def create_any_attribute_group(self, parent: Union[XsdComplexType, XsdElement]) \
-            -> XsdAttributeGroup:
-        return self.builders.create_any_attribute_group(parent)
-
-    @deprecated('5.0', alt="use XMLSchemaBase.builders.create_any_type instead")
-    def create_any_type(self) -> XsdComplexType:
-        return self.builders.create_any_type(self)
 
     @cached_property
     def annotations(self) -> list[XsdAnnotation]:
@@ -881,9 +864,34 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
         return schema
 
-    def build(self) -> None:
-        """Builds the schema's XSD global maps."""
-        self.maps.build()
+    def create_any_content_group(self, parent: Union[XsdComplexType, XsdGroup],
+                                 any_element: Optional[XsdAnyElement] = None) -> XsdGroup:
+        """Helper method for creating an XSD model group based on a wildcard."""
+        return self.builders.create_any_content_group(parent, any_element)
+
+    def create_any_attribute_group(self, parent: Union[XsdComplexType, XsdElement]) \
+            -> XsdAttributeGroup:
+        """Helper method for creating an XSD attribute group based on a wildcard."""
+        return self.builders.create_any_attribute_group(parent)
+
+    def create_any_type(self) -> XsdComplexType:
+        """Helper method for creating an XSD type that accepts any content."""
+        return self.builders.create_any_type(self)
+
+    def create_empty_content_group(self, parent: Union[XsdComplexType, XsdGroup],
+                                   model: str = 'sequence', **attrib: Any) -> XsdGroup:
+        """Helper method for creating an empty XSD model group."""
+        return self.builders.create_empty_content_group(parent, model, **attrib)
+
+    def create_empty_attribute_group(self, parent: Union[XsdComplexType, XsdElement]) \
+            -> XsdAttributeGroup:
+        """Helper method for creating an empty XSD attribute group."""
+        return self.builders.create_empty_attribute_group(parent)
+
+    def create_element(self, name: str, parent: Optional[XsdComponent] = None,
+                       text: Optional[str] = None, **attrib: Any) -> XsdElement:
+        """Helper method for creating an XSD element."""
+        return self.builders.create_element(name, self, parent, text, **attrib)
 
     def clear(self) -> None:
         """Clears the schema cache."""
@@ -894,24 +902,42 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         self.__dict__.pop('simple_types', None)
         self.__dict__.pop('complex_types', None)
         self.__dict__.pop('target_prefix', None)
+        self.__dict__.pop('validation_attempted', None)
+
+    def build(self) -> None:
+        """Builds the schema's XSD global maps."""
+        self.maps.build()
 
     @property
     def built(self) -> bool:
-        if (validation_attempted := self.validation_attempted) == 'none':
-            return False
-        return validation_attempted == 'full' or self.validation != 'strict'
+        return self.maps.built
 
-    @property
+    @cached_property
     def validation_attempted(self) -> str:
-        if (validation_attempted := self.maps.validation_attempted) != 'partial':
-            return validation_attempted
-
-        for t in self.maps.global_maps.iter_staged():
-            for item in t:
-                if item is self or isinstance(item, tuple) and item[-1] is self:
-                    return 'partial'
+        if any(isinstance(t, tuple) and t[-1] is self
+               for x in self.maps.global_maps.iter_staged() for t in x):
+            return 'partial'
+        elif any(c.schema is self and not c.built
+                 for c in self.maps.global_maps.iter_globals()):
+            return 'partial'
+        elif any(c.schema is self for c in self.maps.global_maps.iter_globals()):
+            return 'full'
+        elif any(child.tag in GLOBAL_TAGS for child in self.root) or \
+                any(e.tag in GLOBAL_TAGS for child in self.root for e in child):
+            return 'none'
         else:
             return 'full'
+
+    @property
+    def validity(self) -> str:
+        if self.validation == 'skip':
+            return 'notKnown'
+        elif any(v.errors for v in self.iter_components()):
+            return 'invalid'
+        elif self.validation_attempted != 'full':
+            return 'notKnown'
+        else:
+            return 'valid'
 
     def iter_globals(self) -> Iterator[SchemaGlobalType]:
         """Iterates XSD global definitions/declarations of the schema."""
@@ -988,19 +1014,22 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     def get_element(self, tag: str, path: Optional[str] = None,
                     namespaces: Optional[NsmapType] = None) -> Optional[XsdElement]:
-        if not path:
-            xsd_element = self.find(tag)
-            return xsd_element if isinstance(xsd_element, XsdElement) else None
+        if not path or path == tag or path == f'/{tag}':
+            return self.maps.elements.get(tag)
         elif path[-1] == '*':
             xsd_element = self.find(path[:-1] + tag, namespaces)
             if isinstance(xsd_element, XsdElement):
                 return xsd_element
-
-            obj = self.maps.elements.get(tag)
-            return obj if isinstance(obj, XsdElement) else None
+            else:
+                return self.maps.elements.get(tag)
         else:
             xsd_element = self.find(path, namespaces)
-            return xsd_element if isinstance(xsd_element, XsdElement) else None
+            if not isinstance(xsd_element, XsdElement):
+                return None
+            elif xsd_element.name != tag:
+                return self.maps.elements.get(tag)
+            else:
+                return xsd_element
 
     def create_bindings(self, *bases: type, **attrs: Any) -> None:
         """
@@ -1422,8 +1451,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 elif elem is not resource.root and ancestors:
                     continue
                 else:
-                    reason = _("{!r} is not an element of the schema").format(elem)
-                    yield context.validation_error(validation, self, reason, elem)
+                    yield context.missing_element_error(validation, self, elem, path, schema_path)
                     return
 
             try:
@@ -1479,8 +1507,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 if nm.XSI_TYPE in elem.attrib:
                     xsd_element = self.builders.create_element(elem.tag, self)
                 else:
-                    reason = _("{!r} is not an element of the schema").format(elem)
-                    yield context.validation_error(validation, self, reason, elem)
+                    yield context.missing_element_error(validation, self, elem, path, schema_path)
                     continue
 
             result = xsd_element.raw_decode(elem, validation, context)
@@ -1589,8 +1616,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         instance plus optionally the XSD element and the XSD type, and returns a \
         new `ElementData` instance.
         :param errors: optional internal collector for validation errors.
-        :param kwargs: keyword arguments with other options for building XMLResource \
-        and converter instances.
+        :param kwargs: keyword arguments with other options for building converter instances.
         :return: yields a decoded data object, eventually preceded by a sequence of \
         validation or decoding errors.
         """
@@ -1664,8 +1690,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 if nm.XSI_TYPE in elem.attrib:
                     xsd_element = self.builders.create_element(elem.tag, self)
                 else:
-                    reason = _("{!r} is not an element of the schema").format(elem)
-                    yield context.validation_error(validation, self, reason, elem)
+                    yield context.missing_element_error(validation, self, elem, path, schema_path)
                     return
 
             result = xsd_element.raw_decode(elem, validation, context)

@@ -11,16 +11,18 @@ import copy
 import threading
 import warnings
 from collections.abc import Collection, Iterator, Iterable
+from contextlib import contextmanager
+from functools import cached_property
 from itertools import dropwhile
-from typing import Any, cast, Optional, Union, Type
+from typing import Any, cast, Optional, Type
 
-from elementpath import XPathToken, XPath2Parser
+from elementpath import XPathToken
 
 import xmlschema.names as nm
 from xmlschema.aliases import SchemaType, BaseXsdType, LocationsType, \
     SchemaGlobalType, SchemaSourceType, NsmapType, StagedItemType, ComponentClassType
 from xmlschema.exceptions import XMLSchemaAttributeError, XMLSchemaTypeError, \
-    XMLSchemaValueError, XMLSchemaWarning, XMLSchemaNamespaceError
+    XMLSchemaValueError, XMLSchemaWarning, XMLSchemaNamespaceError, XMLSchemaException
 from xmlschema.translation import gettext as _
 from xmlschema.utils.misc import deprecated
 from xmlschema.utils.qnames import get_extended_qname
@@ -36,7 +38,7 @@ from .models import check_model
 from . import XsdAttribute, XsdSimpleType, XsdComplexType, XsdElement, \
     XsdGroup, XsdIdentity, XsdUnion, XsdAtomicRestriction, \
     XsdAtomic, XsdAtomicBuiltin, XsdNotation, XsdAttributeGroup
-from .builders import GlobalMaps
+from .builders import GLOBAL_MAP_ATTRIBUTE, GlobalMaps
 
 # Default placeholder for deprecation of argument 'validation' in XsdGlobals
 _strict = type('str', (str,), {})('strict')
@@ -44,33 +46,34 @@ _strict = type('str', (str,), {})('strict')
 
 class XsdGlobals(XsdValidator, Collection[SchemaType]):
     """
-    Mediator set for composing XML schema instances and provides lookup maps. It stores the global
-    declarations defined in the registered schemas. Register a schema to
-    add its declarations to the global maps.
+    Mediator collection class for composing XML schema instances and provides lookup maps.
+    It stores the global declarations defined in the registered schemas. Register a schema
+    to add its declarations to the global maps.
 
     :param validator: the origin schema class/instance used for creating the global maps.
+    :param validation: deprecated argument for the validation mode, now it takes the \
+    validation mode of the validator.
     :param parent: an optional parent schema, that is required to be built and with \
     no use of the target namespace of the validator.
+    :param loader_class: an optional subclass of :class:`SchemaLoader` to use for creating \
+    the loader instance.
+    :param locations: schema extra location hints, that can include custom resource locations \
+    or additional namespaces to import after processing schema's import statements.
+    :param use_fallback: if `True` the schema processor uses the validator fallback \
+    location hints to load well-known namespaces (e.g. xhtml).
+    :param use_xpath3: if `True` an XSD 1.1 schema instance uses the XPath 3 processor \
+    for assertions. For default a full XPath 2.0 processor is used.
     """
     _schemas: set[SchemaType]
     namespaces: NamespaceResourcesMap[SchemaType]
     loader: SchemaLoader
     substitution_groups: dict[str, set[XsdElement]]
     identities: dict[str, XsdIdentity]
-    _xpath_parser: Optional[XPath2Parser] = None
 
-    _resolvers = {
-        nm.XSD_SIMPLE_TYPE: 'types',
-        nm.XSD_COMPLEX_TYPE: 'types',
-        nm.XSD_ATTRIBUTE: 'attributes',
-        nm.XSD_ATTRIBUTE_GROUP: 'attribute_groups',
-        nm.XSD_NOTATION: 'notations',
-        nm.XSD_ELEMENT: 'elements',
-        nm.XSD_GROUP: 'groups',
-    }
-
-    __slots__ = ('validation', 'substitution_groups', 'types', 'global_maps',
-                 'loader', '_build_lock', '_validation_attempted', '_validity')
+    __slots__ = ('_build_lock', '_schemas', '_parent', 'validation', 'errors',
+                 'validator', 'namespaces', 'loader', 'global_maps', 'types',
+                 'notations', 'attributes', 'attribute_groups', 'elements',
+                 'groups', 'substitution_groups', 'identities', '_built')
 
     def __init__(self, validator: SchemaType,
                  validation: str = _strict,
@@ -86,12 +89,11 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
 
         super().__init__(validator.validation)
         self._build_lock = threading.Lock()
-        self._validation_attempted = 'none'
-        self._validity = 'notKnown'
+        self._built = False
         self._schemas = set()
+        self._parent = parent
 
         self.validator = validator
-        self._parent = parent
         self.namespaces = NamespaceResourcesMap()  # Registered schemas by namespace URI
 
         self.global_maps = GlobalMaps.from_builders(validator.builders)
@@ -120,9 +122,9 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         return self._schemas
 
     @property
-    def owned_schemas(self) -> list[SchemaType]:
-        """Returns a list of the registered schemas owned by this instance."""
-        return [s for s in self._schemas if s.maps is self]
+    def owned_schemas(self) -> set[SchemaType]:
+        """Returns a set of the registered schemas owned by this instance."""
+        return {s for s in self._schemas if s.maps is self}
 
     @property
     def parent(self) -> Optional[SchemaType]:
@@ -132,9 +134,12 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         return '%s(validator=%r)' % (self.__class__.__name__, self.validator)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name[:1] != '_' and name in self.__dict__ and value is not self.__dict__[name]:
-            msg = _("can't change attribute {!r} of a global maps instance")
-            raise XMLSchemaAttributeError(msg.format(name))
+        if hasattr(self, name):
+            if name == '_built':
+                self.__dict__.clear()
+            elif name != '_parent':
+                msg = _("can't change attribute {!r} of a global maps instance")
+                raise XMLSchemaAttributeError(msg.format(name))
         super().__setattr__(name, value)
 
     def __len__(self) -> int:
@@ -147,22 +152,11 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         return obj in self._schemas
 
     def __getstate__(self) -> dict[str, Any]:
-        state = self.__dict__.copy()
-        for attr in self._mro_slots():
-            if attr not in state:
-                state[attr] = getattr(self, attr)
-
-        state.pop('_build_lock', None)
-        state.pop('_xpath_parser', None)
-        state.pop('xpath_constructors', None)
-        return state
+        return {a: getattr(self, a) for a in self._mro_slots() if a != '_build_lock'}
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        for attr in self._mro_slots():
-            if attr in state:
-                object.__setattr__(self, attr, state.pop(attr))
-
-        self.__dict__.update(state)
+        for attr, value in state.items():
+            object.__setattr__(self, attr, value)
         self._build_lock = threading.Lock()
 
     def __copy__(self) -> 'XsdGlobals':
@@ -199,7 +193,7 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         component, an XMLSchemaKeyError if the *qname* argument is not found in the global map.
         """
         try:
-            global_map = getattr(self, self._resolvers[tag])
+            global_map = GLOBAL_MAP_ATTRIBUTE[tag](self)
         except KeyError:
             msg = _("wrong tag {!r} for an XSD global definition/declaration")
             raise XMLSchemaValueError(msg.format(tag)) from None
@@ -264,46 +258,43 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
 
     @property
     def built(self) -> bool:
-        if (validation_attempted := self.validation_attempted) == 'none':
-            return False
-        return validation_attempted == 'full' or self.validation != 'strict'
+        return self._built
 
-    @property
+    @cached_property
     def validation_attempted(self) -> str:
-        if self._validation_attempted == 'full' and self.global_maps.total_staged:
-            self._validation_attempted = 'partial'
-        return self._validation_attempted
-
-    @property
-    def validity(self) -> str:
-        if self._validity == 'valid' and self.global_maps.total_staged:
-            self._validity = 'notKnown'
-
-        if self._parent is None:
-            return self._validity
-
-        validity = self._parent.maps.validity
-        if validity == self._validity:
-            return validity
-        elif validity == 'valid':
-            return self._validity
+        if not any(m for m in self.global_maps):
+            return 'none'
+        elif not self._built or any(m.total_staged for m in self.global_maps):
+            return 'partial'
         else:
+            return 'full'
+
+    @cached_property
+    def validity(self) -> str:
+        if self.validation == 'skip':
             return 'notKnown'
+        elif any(s.errors for s in self._schemas) or \
+                any(c.errors for c in self.iter_components()):
+            return 'invalid'
+        elif not self._built or any(m.total_staged for m in self.global_maps):
+            return 'notKnown'
+        else:
+            return 'valid'
 
     @validator_property
     def xpath_constructors(self) -> dict[str, Type[XPathToken]]:
-        if not self.built:
+        if not self._built:
             return {}
 
-        self._xpath_parser = self.loader.xpath_parser_class()
-        self._xpath_parser.schema = self.validator.xpath_proxy
+        xpath_parser = self.loader.xpath_parser_class()
+        xpath_parser.schema = self.validator.xpath_proxy
 
         constructors: dict[str, Type[XPathToken]] = {}
         for name, xsd_type in self.types.items():
             if isinstance(xsd_type, XsdAtomic) and \
                     not isinstance(xsd_type, XsdAtomicBuiltin) and \
                     name not in (nm.XSD_ANY_ATOMIC_TYPE, nm.XSD_NOTATION):
-                constructors[name] = self._xpath_parser.schema_constructor(name)
+                constructors[name] = xpath_parser.schema_constructor(name)
         return constructors
 
     @property
@@ -312,10 +303,9 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             self.validator.meta_schema in self._schemas
 
     @property
-    def unbuilt(self) -> list[Union[XsdComponent, SchemaType]]:
+    def unbuilt(self) -> list[XsdComponent]:
         """Property that returns a list with unbuilt components."""
-        return [c for s in self._schemas for c in s.iter_components()
-                if c is not s and not c.built]
+        return [c for c in self.iter_components() if not c.built]
 
     @property
     def xsd_version(self) -> str:
@@ -342,10 +332,8 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             xsd_element.binding = None
 
     def iter_components(self, xsd_classes: Optional[ComponentClassType] = None) \
-            -> Iterator[Union['XsdGlobals', XsdComponent]]:
+            -> Iterator[XsdComponent]:
         """Creates an iterator for the XSD components of built schemas."""
-        if xsd_classes is None or isinstance(self, xsd_classes):
-            yield self
         for xsd_global in self.global_maps.iter_globals():
             yield from xsd_global.iter_components(xsd_classes)
 
@@ -431,10 +419,7 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
                 f"another schema loaded from {source_ref!r} is already registered"
             )
 
-        if self._validation_attempted == 'full':
-            self._validation_attempted = 'partial'
-        if self._validity == 'valid':
-            self._validity = 'notKnown'
+        self._built = False
 
     def merge(self, ancestor: SchemaType) -> None:
         """Merge the global maps until to a specific ancestor."""
@@ -465,8 +450,6 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         self.global_maps.clear()
         self.substitution_groups.clear()
         self.identities.clear()
-        self.__dict__.pop('_xpath_parser', None)
-        self.__dict__.pop('xpath_constructors', None)
 
         for schema in self._schemas:
             if schema.maps is self:
@@ -484,19 +467,18 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             if self.validator.includes:
                 self.validator.includes.clear()
 
-        self._validation_attempted = 'none'
-        self._validity = 'notKnown'
+        self._built = False
 
     def build(self) -> None:
         """
         Build the maps of XSD global definitions/declarations. The global maps are
         updated adding and building the globals of not built registered schemas.
         """
-        if self.built:
+        if self._built:
             return
 
         with self._build_lock:
-            if self.built:
+            if self._built:
                 return
 
             self.check_loaded_schemas()
@@ -508,34 +490,45 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
                 self.substitution_groups.update(ancestor.maps.substitution_groups)
                 self.identities.update(ancestor.maps.identities)
 
+            # Have to respect the insertion order for redefinitions/overrides
             schemas = [s for ns_schemas in self.namespaces.values()
                        for s in ns_schemas if s.maps is self]
 
             self.global_maps.load(schemas)
             self.types.build_builtins(self.validator)
-
-            if not self.global_maps.total_staged:
-                self._validation_attempted = 'full'
-                self._validity = 'valid'
-                return
-
             self.global_maps.build(schemas)
-            if self.validator.meta_schema is not None:
-                self.check(schemas)
+            self.check(schemas)
 
-            if self.global_maps.total_staged:
-                self._validation_attempted = 'partial'
-            else:
-                self._validation_attempted = 'full'
-
-            if self.total_errors:
-                self._validity = 'invalid'
-            elif self._validation_attempted != 'full':
-                self._validity = 'notKnown'
-            else:
-                self._validity = 'valid'
+            self._built = True
+            for s in schemas:
+                s.clear()
 
             self.check_validator()
+
+    @contextmanager
+    def protect_status(self, reraise: bool = True) -> Iterator['XsdGlobals']:
+        """Context manager for set a restore point in case of error."""
+        schemas = self._schemas.copy()
+        namespaces = self.namespaces.copy()
+        global_maps = self.global_maps.copy()
+        substitution_groups = self.substitution_groups.copy()
+        identities = self.identities.copy()
+        built = self._built
+
+        try:
+            yield self
+        except XMLSchemaException:
+            self.clear()
+            self._schemas.clear()
+            self.namespaces.clear()
+            self._schemas.update(schemas)
+            self.namespaces.update(namespaces)
+            self.global_maps.update(global_maps)
+            self.substitution_groups.update(substitution_groups)
+            self.identities.update(identities)
+            self._built = built
+            if reraise:
+                raise
 
     def check_loaded_schemas(self) -> None:
         """Checks the coherence of schema registrations."""
@@ -569,9 +562,8 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
         :param schemas: optional argument with the set of the schemas to check.
         :raise: XMLSchemaParseError
         """
-        self.check_validator()
         if schemas is None:
-            schemas = self.owned_schemas
+            schemas = {s for s in self._schemas if s.maps is self}
 
         # Checks substitution groups circularity
         for qname in self.substitution_groups:

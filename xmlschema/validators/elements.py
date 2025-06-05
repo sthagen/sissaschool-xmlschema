@@ -23,21 +23,20 @@ from elementpath import XPath2Parser, ElementPathError, XPathContext, XPathToken
 from elementpath.datatypes import AbstractDateTime, Duration
 from elementpath.xpath_nodes import EtreeElementNode
 
-from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError
+from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError, \
+    XMLResourceParseError
 from xmlschema.names import XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE, XSD_ALTERNATIVE, \
     XSD_ELEMENT, XSD_ANY_TYPE, XSI_NIL, XSI_TYPE, XSD_ERROR, XSD_NOTATION_TYPE, \
     XSD_ANNOTATION
-from xmlschema.aliases import ElementType, SchemaType, BaseXsdType, SchemaElementType, \
+from xmlschema.aliases import ElementType, BaseXsdType, SchemaElementType, \
     ModelParticleType, ComponentClassType, DecodeType, DecodedValueType
 from xmlschema.translation import gettext as _
 from xmlschema.utils.etree import etree_iter_location_hints, etree_iter_namespaces
 from xmlschema.utils.decoding import Empty, raw_encode_attributes, strictly_equal
 from xmlschema.utils.qnames import get_qname
-from xmlschema.utils.urls import normalize_url
 from xmlschema import dataobjects
 from xmlschema.converters import ElementData, XMLSchemaConverter
 from xmlschema.xpath import XMLSchemaProxy, ElementPathMixin, XPathElement
-from xmlschema.resources import XMLResource
 
 from .exceptions import XMLSchemaValidationError, XMLSchemaParseError, \
     XMLSchemaStopValidation, XMLSchemaTypeTableWarning
@@ -63,9 +62,6 @@ class XsdElement(XsdComponent, ParticleMixin,
                  ValidationMixin[ElementType, Any]):
     """
     Class for XSD 1.0 *element* declarations.
-
-    :ivar type: the XSD simpleType or complexType of the element.
-    :ivar attributes: the group of the attributes associated with the element.
 
     ..  <element
           abstract = boolean : false
@@ -93,16 +89,39 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     parent: Optional['XsdGroup']
     ref: Optional['XsdElement']
-    attributes: 'XsdAttributeGroup'
 
     type: BaseXsdType
+    """The XSD simpleType or complexType of the element."""
+
+    attributes: 'XsdAttributeGroup'
+    """The group of the attributes associated with the element."""
+
     content: Union[tuple[()], 'XsdGroup']
-    abstract = False
-    nillable = False
-    qualified = False
+
+    abstract: bool = False
+    """
+    Defines whether the element can be used in an instance document. An abstract
+    element must be global and can still be the head of a substitution group.
+    """
+
+    nillable: bool = False
+    """
+    Defines whether the element content is nillable using xsi:nil="true" as attribute.
+    """
+
     form: Optional[str] = None
+    qualified: bool = False
+    """
+    The effective form for the element. If `True` the element name is qualified by a
+    braced namespace URI as prefix. The name of a global element is always qualified.
+    """
+
     default: Optional[str] = None
+    """The default value of the element if its content is a simple type."""
+
     fixed: Optional[str] = None
+    """The fixed value of the element if its content is a simple type."""
+
     substitution_group: Optional[str] = None
 
     identities: list[XsdIdentity]
@@ -114,23 +133,11 @@ class XsdElement(XsdComponent, ParticleMixin,
     _ADMITTED_TAGS = XSD_ELEMENT,
     _block: Optional[str] = None
     _final: Optional[str] = None
-    _head_type: Optional[BaseXsdType] = None
 
     binding: Optional[DataBindingType] = None
 
-    __slots__ = ('type', 'selected_by', 'xsi_types', 'identities', 'content',
-                 'attributes', 'min_occurs', 'max_occurs', '_build')
-
-    def __init__(self, elem: ElementType,
-                 schema: SchemaType,
-                 parent: Optional[XsdComponent] = None,
-                 build: bool = True) -> None:
-
-        self.min_occurs = self.max_occurs = 1
-        self._build = build
-        self.selected_by = set()
-        self.xsi_types = set()
-        super().__init__(elem, schema, parent)
+    __slots__ = ('type', 'selected_by', 'xsi_types', 'identities',
+                 'content', 'attributes', 'min_occurs', 'max_occurs')
 
     def __repr__(self) -> str:
         return '%s(%s=%r, occurs=%r)' % (
@@ -156,9 +163,20 @@ class XsdElement(XsdComponent, ParticleMixin,
         if self.content:
             yield from self.content.iter_elements()
 
+    def build(self) -> None:
+        if not self._built:
+            self._built = True
+            self._parse()
+
     def _parse(self) -> None:
-        if not self._build:
+        if not hasattr(self.parent, '_group'):
+            self._built = True
+        elif not self._built:
             return
+
+        self.min_occurs = self.max_occurs = 1
+        self.selected_by = set()
+        self.xsi_types = set()
 
         self._parse_particle(self.elem)
         self._parse_attributes()
@@ -169,6 +187,8 @@ class XsdElement(XsdComponent, ParticleMixin,
 
             if self.parent is None and 'substitutionGroup' in self.elem.attrib:
                 self._parse_substitution_group(self.elem.attrib['substitutionGroup'])
+
+        self._built = True
 
     def _parse_attributes(self) -> None:
         attrib = self.elem.attrib
@@ -368,13 +388,11 @@ class XsdElement(XsdComponent, ParticleMixin,
                 return
 
         final = head_element.final
-        if self.type == head_element.type:
-            pass
-        elif self.type.name == XSD_ANY_TYPE:
+        if self.type.name == XSD_ANY_TYPE and 'type' not in self.elem.attrib:
             if head_element.type.name != XSD_ANY_TYPE:
-                # Use head element's type for validate content
+                # Set the type with head element's type for validate content
                 # ref: https://www.w3.org/TR/xmlschema-1/#cElement_Declarations
-                self._head_type = head_element.type
+                self.type = head_element.type
         elif not self.type.is_derived(head_element.type):
             msg = _("{0!r} type is not of the same or a derivation "
                     "of the head element {1!r} type")
@@ -417,28 +435,6 @@ class XsdElement(XsdComponent, ParticleMixin,
             global_elements=schema_node.children,
         )
 
-    def build(self) -> None:
-        if not self._built:
-            self._build = True
-            self._parse()
-            self._built = True
-
-    @property
-    def built(self) -> bool:
-        return self._built and (self.type.parent is None or self.type.built) and \
-            all(c.built for c in self.identities)
-
-    @property
-    def validation_attempted(self) -> str:
-        if self.built:
-            return 'full'
-        elif self.type.validation_attempted == 'partial':
-            return 'partial'
-        elif any(c.validation_attempted == 'partial' for c in self.identities):
-            return 'partial'
-        else:
-            return 'none'
-
     @property
     def scope(self) -> str:
         """The scope of the element declaration that can be 'global' or 'local'."""
@@ -451,6 +447,10 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     @property
     def final(self) -> str:
+        """
+        The effective value for prevent the usage of derived elements. Can be empty, '#all'
+        or containing a subset of words (extension|restrictions) separated by a space.
+        """
         if self.ref is not None:
             return self.ref.final
         elif self._final is not None:
@@ -459,11 +459,29 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     @property
     def block(self) -> str:
+        """
+        The effective value for blocking the derivation of the element. Can be empty, '#all' or
+        containing a subset of words (extension|restrictions|substitution) separated by a space.
+        """
         if self.ref is not None:
             return self.ref.block
         elif self._block is not None:
             return self._block
         return self.schema.block_default
+
+    def overall_min_occurs(self, particle: ModelParticleType) -> int:
+        """
+        Returns the overall minimum for occurrences of a content model particle.
+        The content type of the element must be 'element-only' or 'mixed'.
+        """
+        return self.type.overall_min_occurs(particle)
+
+    def overall_max_occurs(self, particle: ModelParticleType) -> Optional[int]:
+        """
+        Returns the overall maximum for occurrences of a content model particle.
+        The content type of the element must be 'element-only' or 'mixed'.
+        """
+        return self.type.overall_max_occurs(particle)
 
     def get_binding(self, *bases: Type[Any], replace_existing: bool = False, **attrs: Any) \
             -> DataBindingType:
@@ -485,7 +503,7 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     def get_type(self, elem: Union[ElementType, ElementData],
                  inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
-        return self._head_type or self.type
+        return self.type
 
     def get_attributes(self, xsd_type: BaseXsdType) -> 'XsdAttributeGroup':
         if not isinstance(xsd_type, XsdSimpleType):
@@ -555,13 +573,8 @@ class XsdElement(XsdComponent, ParticleMixin,
 
     def check_dynamic_context(self, elem: ElementType, validation: str,
                               context: DecodeContext) -> None:
-        if not isinstance(context.source, XMLResource):
-            return
-
         for ns, url in etree_iter_location_hints(elem):
-            base_url = context.source.base_url
-            url = normalize_url(url, base_url)
-            if any(url == schema.url for schema in self.maps.iter_schemas()):
+            if self.maps.get_schema(ns, url, context.source.base_url) is not None:
                 continue
 
             if ns in etree_iter_namespaces(context.source.root, elem):
@@ -569,15 +582,17 @@ class XsdElement(XsdComponent, ParticleMixin,
                 context.validation_error(validation, self, reason, elem)
 
             try:
-                if ns in self.maps.namespaces:
-                    schema = self.maps.namespaces[ns][0]
-                    schema.include_schema(url)
-                    self.schema.clear()
-                    self.schema.build()
-                else:
-                    self.schema.import_schema(ns, url, base_url, build=True)
+                with self.maps.protect_status():
+                    if ns in self.maps.namespaces:
+                        schema = self.maps.namespaces[ns][0]
+                        schema.include_schema(url, context.source.base_url)
+                    else:
+                        schema = self.schema
+                        schema.import_schema(ns, url, context.source.base_url)
+                    schema.clear()
+                    schema.build()
 
-            except (XMLSchemaValidationError, ParseError) as err:
+            except (XMLSchemaValidationError, XMLResourceParseError) as err:
                 context.validation_error(validation, self, err, elem)
             except XMLSchemaParseError as err:
                 context.validation_error(validation, self, err.message, elem)
@@ -1256,9 +1271,14 @@ class Xsd11Element(XsdElement):
         </element>
     """
     def _parse(self) -> None:
-        if not self._build:
+        if not hasattr(self.parent, '_group'):
+            self._built = True
+        elif not self._built:
             return
 
+        self.min_occurs = self.max_occurs = 1
+        self.selected_by = set()
+        self.xsi_types = set()
         self._parse_particle(self.elem)
         self._parse_attributes()
 
@@ -1294,12 +1314,6 @@ class Xsd11Element(XsdElement):
         if alternatives:
             self.alternatives = alternatives
 
-    @property
-    def built(self) -> bool:
-        return self._built and (self.type.parent is None or self.type.built) and \
-            all(c.built for c in self.identities) and \
-            all(a.built for a in self.alternatives)
-
     def iter_components(self, xsd_classes: ComponentClassType = None) -> Iterator[XsdComponent]:
         if xsd_classes is None:
             yield self
@@ -1307,10 +1321,8 @@ class Xsd11Element(XsdElement):
         else:
             if isinstance(self, xsd_classes):
                 yield self
-
-            for obj in self.identities:
-                if isinstance(obj, xsd_classes):
-                    yield obj
+            if issubclass(XsdIdentity, xsd_classes):
+                yield from self.identities
 
         for alt in self.alternatives:
             yield from alt.iter_components(xsd_classes)
@@ -1328,7 +1340,7 @@ class Xsd11Element(XsdElement):
     def get_type(self, elem: Union[ElementType, ElementData],
                  inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
         if not self.alternatives:
-            return self._head_type or self.type
+            return self.type
 
         if isinstance(elem, ElementData):
             if elem.attributes:
@@ -1351,7 +1363,7 @@ class Xsd11Element(XsdElement):
                     if alt.token is None or alt.test(elem):
                         return alt.type
 
-        return self._head_type or self.type
+        return self.type
 
     def is_overlap(self, other: SchemaElementType) -> bool:
         if isinstance(other, XsdElement):
@@ -1405,25 +1417,28 @@ class Xsd11Element(XsdElement):
 
     def check_dynamic_context(self, elem: ElementType, validation: str,
                               context: DecodeContext) -> None:
-        if context.source is None:
-            return
-
         for ns, url in etree_iter_location_hints(elem):
-            base_url = context.source.base_url
-            url = normalize_url(url, base_url)
-            if any(url == schema.url for schema in self.maps.iter_schemas()):
+            if self.maps.get_schema(ns, url, context.source.base_url) is not None:
                 continue
 
             try:
-                if ns in self.maps.namespaces:
-                    schema = self.maps.namespaces[ns][0]
-                    schema.include_schema(url)
+                with self.maps.protect_status():
+                    if ns in self.maps.namespaces:
+                        schema = self.maps.namespaces[ns][0]
+                        schema.include_schema(url, context.source.base_url)
+                    else:
+                        schema = self.schema
+                        schema.import_schema(ns, url, context.source.base_url)
                     schema.clear()
                     schema.build()
-                else:
-                    schema = self.schema
-                    schema.import_schema(ns, url, base_url, build=True)
 
+            except (XMLSchemaValidationError, ParseError) as err:
+                context.validation_error(validation, self, err, elem)
+            except XMLSchemaParseError as err:
+                context.validation_error(validation, self, err.message, elem)
+            except OSError:
+                continue
+            else:
                 def stop_validation(e: ElementType, _xsd_element: XsdElement) -> bool:
                     if e is elem:
                         raise XMLSchemaStopValidation()
@@ -1435,13 +1450,6 @@ class Xsd11Element(XsdElement):
                     reason = _(f"adding schema at {url} change the "
                                f"assessment outcome of previous items")
                     context.validation_error(validation, self, reason, elem)
-
-            except (XMLSchemaValidationError, ParseError) as err:
-                context.validation_error(validation, self, err, elem)
-            except XMLSchemaParseError as err:
-                context.validation_error(validation, self, err.message, elem)
-            except OSError:
-                continue
 
 
 class XsdAlternative(XsdComponent):
@@ -1546,14 +1554,8 @@ class XsdAlternative(XsdComponent):
                     self.parse_error(msg % child.tag.split('}')[-1])
 
     @property
-    def built(self) -> bool:
-        if not hasattr(self, 'type'):
-            return False
-        return self.type.parent is None or self.type.built
-
-    @property
     def validation_attempted(self) -> str:
-        if self.built:
+        if self._built:
             return 'full'
         elif not hasattr(self, 'type'):
             return 'none'

@@ -28,7 +28,8 @@ from xmlschema.validators import XMLSchemaBase, XMLSchema10, XMLSchema11, \
 from xmlschema.testing import SKIP_REMOTE_TESTS, XsdValidatorTestCase
 from xmlschema.validators.schemas import logger
 from xmlschema.validators.builders import XsdBuilders
-from xmlschema.validators import XMLSchemaValidationError
+from xmlschema.validators import XMLSchemaValidationError, XsdComplexType, \
+    XsdAttributeGroup, XsdElement, XsdGroup
 
 
 class CustomXMLSchema(XMLSchema10):
@@ -843,30 +844,168 @@ class TestXMLSchema10(XsdValidatorTestCase):
         with self.assertRaises(xmlschema.XMLSchemaException):
             self.schema_class(malformed_xsd)
 
-    def test_deprecated_api(self):
+    def test_build_helpers_api(self):
         schema = self.schema_class(dedent("""\
             <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
                 <xs:element name="root"/>
             </xs:schema>"""))
         xsd_element = schema.elements['root']
 
-        with warnings.catch_warnings(record=True) as ctx:
-            warnings.simplefilter("always")
+        self.assertIsInstance(
+            schema.create_any_type(), XsdComplexType
+        )
+        self.assertIsInstance(
+            schema.create_any_content_group(xsd_element.type), XsdGroup
+        )
+        self.assertIsInstance(
+            schema.create_any_attribute_group(xsd_element), XsdAttributeGroup
+        )
+        self.assertIsInstance(
+            schema.create_empty_attribute_group(xsd_element), XsdAttributeGroup
+        )
+        self.assertIsInstance(
+            schema.create_empty_content_group(xsd_element.type), XsdGroup
+        )
+        self.assertIsInstance(
+            schema.create_element('foo', xsd_element), XsdElement
+        )
 
-            schema.create_any_type()
-            self.assertEqual(len(ctx), 1)
-            self.assertEqual(ctx[0].category, DeprecationWarning)
-            self.assertIn('will be removed in v5.0', ctx[0].message.args[0])
+    def test_invalid_substitution_group__issue_452(self):
 
-            schema.create_any_content_group(xsd_element.type)
-            self.assertEqual(len(ctx), 2)
-            self.assertEqual(ctx[1].category, DeprecationWarning)
-            self.assertIn('will be removed in v5.0', ctx[1].message.args[0])
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <?xml version="1.0" encoding="utf-8"?>
+                <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                        xmlns:w3="http://xmlschema.test/ns"
+                        targetNamespace="http://xmlschema.test/ns"
+                        elementFormDefault="qualified"
+                        attributeFormDefault="unqualified">
+                    <element id="x1" name="x1" nillable="true" type="integer" />
+                    <element id="x2" name="x2" substitutionGroup="w3:x1" />
+                    <element id="x3" name="x3" substitutionGroup="w3:x2" />
+                    <element id="x4" name="x4" substitutionGroup="w3:x3" type="boolean"/>
+                </schema>"""))
+        self.assertIn("type is not of the same or a derivation of the head element",
+                      str(ctx.exception))
 
-            schema.create_any_attribute_group(xsd_element)
-            self.assertEqual(len(ctx), 3)
-            self.assertEqual(ctx[2].category, DeprecationWarning)
-            self.assertIn('will be removed in v5.0', ctx[2].message.args[0])
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <?xml version="1.0" encoding="utf-8"?>
+                <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                        xmlns:w3="http://xmlschema.test/ns"
+                        targetNamespace="http://xmlschema.test/ns"
+                        elementFormDefault="qualified"
+                        attributeFormDefault="unqualified">
+                    <element id="x1" name="x1" nillable="true" type="integer" />
+                    <element id="x2" name="x2" substitutionGroup="w3:x1" />
+                    <element id="x3" name="x4" substitutionGroup="w3:x2" type="boolean"/>
+                </schema>"""))
+        self.assertIn("type is not of the same or a derivation of the head element",
+                      str(ctx.exception))
+
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <?xml version="1.0" encoding="utf-8"?>
+                <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                        xmlns:w3="http://xmlschema.test/ns"
+                        targetNamespace="http://xmlschema.test/ns"
+                        elementFormDefault="qualified"
+                        attributeFormDefault="unqualified">
+                    <element id="x1" name="x1" nillable="true" type="integer" />
+                    <element id="x2" name="x4" substitutionGroup="w3:x1" type="boolean"/>
+                </schema>"""))
+        self.assertIn("type is not of the same or a derivation of the head element",
+                      str(ctx.exception))
+
+        with self.assertRaises(XMLSchemaParseError) as ctx:
+            self.schema_class(dedent("""\
+                <?xml version="1.0" encoding="utf-8"?>
+                <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                        xmlns:w3="http://xmlschema.test/ns"
+                        targetNamespace="http://xmlschema.test/ns"
+                        elementFormDefault="qualified"
+                        attributeFormDefault="unqualified">
+                    <element id="x1" name="x1" nillable="true" type="integer" />
+                    <element id="x2" name="x4" substitutionGroup="w3:x1" type="anyType"/>
+                </schema>"""))
+        self.assertIn("type is not of the same or a derivation of the head element",
+                      str(ctx.exception))
+
+    def test_multiple_substitution_groups__issue_452(self):
+
+        schema = self.schema_class(dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                    xmlns:w3="http://xmlschema.test/ns"
+                    targetNamespace="http://xmlschema.test/ns"
+                    elementFormDefault="qualified"
+                    attributeFormDefault="unqualified">
+                <element id="x1" name="x1" nillable="true" type="decimal" />
+                <element id="x2" name="x2" substitutionGroup="w3:x1" type="integer"/>
+                <element id="x3" name="x3" substitutionGroup="w3:x2" type="int"/>
+                <element id="x4" name="x4" substitutionGroup="w3:x3" type="short"/>
+            </schema>"""))
+
+        self.assertIsNone(schema.validate('<x4 xmlns="http://xmlschema.test/ns">8000</x4>'))
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.validate('<x4 xmlns="http://xmlschema.test/ns">80000</x4>')
+        self.assertIn('failed validating 80000 with', str(ctx.exception))
+
+        schema = self.schema_class(dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                    xmlns:w3="http://xmlschema.test/ns"
+                    targetNamespace="http://xmlschema.test/ns"
+                    elementFormDefault="qualified"
+                    attributeFormDefault="unqualified">
+                <element id="x1" name="x1" nillable="true" type="decimal" />
+                <element id="x2" name="x2" substitutionGroup="w3:x1"/>
+            </schema>"""))
+
+        # The effective type is not xs:anyType due to substitution: this may be an override
+        # but the alternative requires more checks and an extra attribute for elements. This
+        # happens only when the substitute element has no type explicitly associated.
+        self.assertEqual(
+            schema.elements['x2'].type.name, '{http://www.w3.org/2001/XMLSchema}decimal'
+        )
+        self.assertIsNone(schema.validate('<x2 xmlns="http://xmlschema.test/ns">80000</x2>'))
+
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.validate('<x2 xmlns="http://xmlschema.test/ns">foo</x2>')
+        self.assertIn("invalid value 'foo'", str(ctx.exception))
+
+    def test_substitution_groups_on_refs__issue_452(self):
+
+        schema = self.schema_class(dedent("""\
+            <?xml version="1.0" encoding="utf-8"?>
+            <schema xmlns="http://www.w3.org/2001/XMLSchema"
+                    xmlns:w3="http://xmlschema.test/ns"
+                    targetNamespace="http://xmlschema.test/ns"
+                    elementFormDefault="qualified"
+                    attributeFormDefault="unqualified">
+                <element id="x1" name="x1" nillable="true" type="integer" />
+                <element id="x2" name="x2" substitutionGroup="w3:x1" type="short"/>
+
+                <element name="values" type="w3:valuesType"/>
+                <complexType name="valuesType">
+                    <sequence>
+                        <element ref="w3:x1" maxOccurs="unbounded"/>
+                    </sequence>
+                </complexType>
+            </schema>"""))
+
+        self.assertIsNone(schema.validate(
+            '<values xmlns="http://xmlschema.test/ns"><x1>80000</x1></values>'
+        ))
+        self.assertIsNone(schema.validate(
+            '<values xmlns="http://xmlschema.test/ns"><x2>8000</x2></values>'
+        ))
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.validate(
+                '<values xmlns="http://xmlschema.test/ns"><x2>80000</x2></values>'
+            )
+        self.assertIn('failed validating 80000 with', str(ctx.exception))
 
 
 class TestXMLSchema11(TestXMLSchema10):
@@ -933,6 +1072,16 @@ class TestXMLSchema11(TestXMLSchema10):
                 </xs:schema>"""))
 
         self.assertIn('XPST0003', str(ctx.exception))
+
+    def test_xpath_predicate_selector__issue_454(self):
+        schema_file = self.casepath('examples/vehicles/vehicles.xsd')
+        xml_file = self.casepath('examples/vehicles/vehicles.xml')
+
+        schema = self.schema_class(schema_file)
+        with self.assertRaises(XMLSchemaValidationError) as ctx:
+            schema.decode(xml_file, '/vh:vehicles/vh:bikes/vh:bike[2]')
+
+        self.assertIn("maybe you have to provide a different path", ctx.exception.reason)
 
 
 class TestXMLSchemaMeta(unittest.TestCase):

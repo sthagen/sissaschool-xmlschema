@@ -261,7 +261,8 @@ class TestEncoding(XsdValidatorTestCase):
         list_of_booleans = self.st_schema.types['list_of_booleans']
         self.check_encode(list_of_booleans, [True, False, True], 'true false true')
         self.check_encode(list_of_booleans, [10, False, True], XMLSchemaEncodeError)
-        self.check_encode(list_of_booleans, [True, False, 40.0], 'true false', validation='lax')
+        self.check_encode(list_of_booleans, [True, False, 40.0],
+                          'true false true', validation='lax')
         self.check_encode(list_of_booleans, [True, False, 40.0],
                           'true false 40.0', validation='skip')
 
@@ -305,12 +306,13 @@ class TestEncoding(XsdValidatorTestCase):
                           128000, XMLSchemaValidationError)
         elem.text = '0'
         self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'), 0, elem)
-        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'),
-                          '0', XMLSchemaValidationError)
+        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'), 0, elem)
         self.check_encode(self.get_element('A', type='xs:positiveInteger'),
                           0, XMLSchemaValidationError)
         elem.text = '-1'
         self.check_encode(self.get_element('A', type='xs:negativeInteger'), -1, elem)
+        self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'),
+                          '-1', XMLSchemaValidationError)
         self.check_encode(self.get_element('A', type='xs:nonNegativeInteger'),
                           -1, XMLSchemaValidationError)
 

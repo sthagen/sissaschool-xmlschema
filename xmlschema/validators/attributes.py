@@ -38,11 +38,9 @@ AttributeGroupDecodeType = Optional[list[tuple[str, DecodedValueType]]]
 AttributeGroupEncodeType = Optional[list[tuple[str, str]]]
 
 
-class XsdAttribute(XsdComponent, ValidationMixin[str, DecodedValueType]):
+class XsdAttribute(XsdComponent, ValidationMixin[Optional[str], DecodedValueType]):
     """
     Class for XSD 1.0 *attribute* declarations.
-
-    :ivar type: the XSD simpleType of the attribute.
 
     ..  <attribute
           default = string
@@ -65,12 +63,29 @@ class XsdAttribute(XsdComponent, ValidationMixin[str, DecodedValueType]):
     prefixed_name: str
 
     type: XsdSimpleType
-    qualified: bool = False
-    default: Optional[str] = None
-    fixed: Optional[str] = None
+    """The XSD simpleType of the attribute."""
+
     form: Optional[str] = None
+    qualified: bool = False
+    """
+    The effective form for the attribute. If `True` the attribute name is qualified by a
+    braced namespace URI as prefix. The name of a global attribute is always qualified.
+    """
+
+    default: Optional[str] = None
+    """The default value of the attribute."""
+
+    fixed: Optional[str] = None
+    """The fixed value of the attribute."""
+
     use: str = 'optional'
-    inheritable: bool = False  # For XSD 1.1 attributes, always False for XSD 1.0 attributes.
+    """Defines the use of the attribute. Can be 'optional', 'prohibited' or 'required'."""
+
+    inheritable: bool = False
+    """
+    Defines whether the attribute can be inherited by descendant elements.
+    XSD 1.1 only, it's always `False` for XSD 1.0 attributes.
+    """
 
     __slots__ = ('type',)
 
@@ -195,10 +210,6 @@ class XsdAttribute(XsdComponent, ValidationMixin[str, DecodedValueType]):
                 self.parse_error(msg)
 
     @property
-    def validation_attempted(self) -> str:
-        return 'full'
-
-    @property
     def scope(self) -> str:
         """The scope of the attribute declaration that can be 'global' or 'local'."""
         return 'global' if self.parent is None else 'local'
@@ -228,7 +239,7 @@ class XsdAttribute(XsdComponent, ValidationMixin[str, DecodedValueType]):
         """Returns the decoded data value of the provided text as XPath fn:data()."""
         return cast(AtomicValueType, self.decode(text, validation='skip'))
 
-    def raw_decode(self, obj: str, validation: str, context: DecodeContext) \
+    def raw_decode(self, obj: Optional[str], validation: str, context: DecodeContext) \
             -> DecodedValueType:
         if obj is None and self.default is not None:
             obj = self.default
@@ -250,6 +261,11 @@ class XsdAttribute(XsdComponent, ValidationMixin[str, DecodedValueType]):
                     self.type.text_decode(self.fixed):
                 msg = _("attribute {0!r} has a fixed value {1!r}").format(self.name, self.fixed)
                 context.validation_error(validation, self, msg, obj)
+
+        if obj is None:
+            msg = _("attribute {0!r} has no value").format(self.name)
+            context.validation_error(validation, self, msg, obj)
+            return None
 
         value = self.type.raw_decode(obj, validation, context)
 

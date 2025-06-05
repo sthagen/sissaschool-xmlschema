@@ -25,7 +25,8 @@ from .helpers import decimal_validator, qname_validator, byte_validator, \
     unsigned_short_validator, unsigned_int_validator, unsigned_long_validator, \
     negative_int_validator, positive_int_validator, non_positive_int_validator, \
     non_negative_int_validator, hex_binary_validator, base64_binary_validator, \
-    error_type_validator, boolean_to_python, python_to_boolean, python_to_float
+    error_type_validator, boolean_to_python, python_to_boolean, python_to_float, \
+    python_to_int
 
 #
 # Admitted facets sets for XSD atomic types
@@ -86,7 +87,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_DECIMAL,
         'datatype': datatypes.DecimalProxy,
-        'python_type': (Decimal, str, int, float),
+        'python_type': (Decimal, int, float),
         'admitted_facets': DECIMAL_FACETS,
         'to_python': datatypes.DecimalProxy,
         'facets': [decimal_validator, COLLAPSE_WHITE_SPACE_ELEMENT],
@@ -96,7 +97,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_GDAY,
         'datatype': datatypes.GregorianDay,
-        'python_type': (datatypes.GregorianDay, str),
+        'python_type': datatypes.GregorianDay,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianDay.fromstring,
@@ -104,7 +105,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_GMONTH,
         'datatype': datatypes.GregorianMonth,
-        'python_type': (datatypes.GregorianMonth, str),
+        'python_type': datatypes.GregorianMonth,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianMonth.fromstring,
@@ -112,7 +113,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_GMONTH_DAY,
         'datatype': datatypes.GregorianMonthDay,
-        'python_type': (datatypes.GregorianMonthDay, str),
+        'python_type': datatypes.GregorianMonthDay,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianMonthDay.fromstring,
@@ -120,7 +121,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_TIME,
         'datatype': datatypes.Time,
-        'python_type': (datatypes.Time, str),
+        'python_type': datatypes.Time,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.Time.fromstring,
@@ -128,7 +129,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_DURATION,
         'datatype': datatypes.Duration,
-        'python_type': (datatypes.Duration, str),
+        'python_type': datatypes.Duration,
         'admitted_facets': FLOAT_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.Duration.fromstring,
@@ -138,21 +139,21 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
     {
         'name': nm.XSD_QNAME,
         'datatype': datatypes.QName,
-        'python_type': str,
+        'python_type': (str, datatypes.QName),
         'admitted_facets': STRING_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT, qname_validator],
     },  # prf:name (the prefix needs to be qualified with an in-scope namespace)
     {
         'name': nm.XSD_NOTATION_TYPE,
         'datatype': datatypes.Notation,
-        'python_type': str,
+        'python_type': (str, datatypes.Notation),
         'admitted_facets': STRING_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
     },  # type for NOTATION attributes: QNames of xs:notation declarations as value space.
     {
         'name': nm.XSD_ANY_URI,
         'datatype': datatypes.AnyURI,
-        'python_type': str,
+        'python_type': (str, datatypes.AnyURI),
         'admitted_facets': STRING_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
     },  # absolute or relative uri (RFC 2396)
@@ -251,12 +252,14 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_INTEGER,
         'datatype': datatypes.Integer,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_DECIMAL
     },  # any integer value
     {
         'name': nm.XSD_LONG,
         'datatype': datatypes.Long,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_INTEGER,
         'facets': [long_validator,
                    Element(nm.XSD_MIN_INCLUSIVE, value='-9223372036854775808'),
@@ -266,6 +269,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_INT,
         'datatype': datatypes.Int,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_LONG,
         'facets': [int_validator,
                    Element(nm.XSD_MIN_INCLUSIVE, value='-2147483648'),
@@ -275,6 +279,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_SHORT,
         'datatype': datatypes.Short,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_INT,
         'facets': [short_validator,
                    Element(nm.XSD_MIN_INCLUSIVE, value='-32768'),
@@ -284,6 +289,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_BYTE,
         'datatype': datatypes.Byte,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_SHORT,
         'facets': [byte_validator,
                    Element(nm.XSD_MIN_INCLUSIVE, value='-128'),
@@ -293,6 +299,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_NON_NEGATIVE_INTEGER,
         'datatype': datatypes.NonNegativeInteger,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_INTEGER,
         'facets': [non_negative_int_validator, Element(nm.XSD_MIN_INCLUSIVE, value='0')]
     },  # only zero and more value allowed [>= 0]
@@ -300,6 +307,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_POSITIVE_INTEGER,
         'datatype': datatypes.PositiveInteger,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_NON_NEGATIVE_INTEGER,
         'facets': [positive_int_validator, Element(nm.XSD_MIN_INCLUSIVE, value='1')]
     },  # only positive value allowed [> 0]
@@ -307,6 +315,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_UNSIGNED_LONG,
         'datatype': datatypes.UnsignedLong,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_NON_NEGATIVE_INTEGER,
         'facets': [unsigned_long_validator,
                    Element(nm.XSD_MAX_INCLUSIVE, value='18446744073709551615')]
@@ -315,6 +324,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_UNSIGNED_INT,
         'datatype': datatypes.UnsignedInt,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_UNSIGNED_LONG,
         'facets': [unsigned_int_validator, Element(nm.XSD_MAX_INCLUSIVE, value='4294967295')]
     },  # unsigned 64 bit value
@@ -322,6 +332,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_UNSIGNED_SHORT,
         'datatype': datatypes.UnsignedShort,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_UNSIGNED_INT,
         'facets': [unsigned_short_validator, Element(nm.XSD_MAX_INCLUSIVE, value='65535')]
     },  # unsigned 32 bit value
@@ -329,6 +340,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_UNSIGNED_BYTE,
         'datatype': datatypes.UnsignedByte,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_UNSIGNED_SHORT,
         'facets': [unsigned_byte_validator, Element(nm.XSD_MAX_INCLUSIVE, value='255')]
     },  # unsigned 8 bit value
@@ -336,6 +348,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_NON_POSITIVE_INTEGER,
         'datatype': datatypes.NonPositiveInteger,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_INTEGER,
         'facets': [non_positive_int_validator, Element(nm.XSD_MAX_INCLUSIVE, value='0')]
     },  # only zero and smaller value allowed [<= 0]
@@ -343,6 +356,7 @@ XSD_COMMON_BUILTIN_TYPES: tuple[dict[str, Any], ...] = (
         'name': nm.XSD_NEGATIVE_INTEGER,
         'datatype': datatypes.NegativeInteger,
         'python_type': int,
+        'from_python': python_to_int,
         'base_type': nm.XSD_NON_POSITIVE_INTEGER,
         'facets': [negative_int_validator, Element(nm.XSD_MAX_INCLUSIVE, value='-1')]
     },  # only negative value allowed [< 0]
@@ -370,7 +384,7 @@ XSD_10_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DATETIME,
         'datatype': datatypes.DateTime10,
-        'python_type': (datatypes.DateTime10, str),
+        'python_type': datatypes.DateTime10,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.DateTime10.fromstring,
@@ -378,7 +392,7 @@ XSD_10_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DATE,
         'datatype': datatypes.Date10,
-        'python_type': (datatypes.Date10, str),
+        'python_type': datatypes.Date10,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.Date10.fromstring,
@@ -386,7 +400,7 @@ XSD_10_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_GYEAR,
         'datatype': datatypes.GregorianYear10,
-        'python_type': (datatypes.GregorianYear10, str),
+        'python_type': datatypes.GregorianYear10,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianYear10.fromstring,
@@ -394,7 +408,7 @@ XSD_10_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_GYEAR_MONTH,
         'datatype': datatypes.GregorianYearMonth10,
-        'python_type': (datatypes.GregorianYearMonth10, str),
+        'python_type': datatypes.GregorianYearMonth10,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianYearMonth10.fromstring,
@@ -423,7 +437,7 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DATETIME,
         'datatype': datatypes.DateTime,
-        'python_type': (datatypes.DateTime, str),
+        'python_type': datatypes.DateTime,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.DateTime.fromstring,
@@ -431,7 +445,7 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DATE,
         'datatype': datatypes.Date,
-        'python_type': (datatypes.Date, str),
+        'python_type': datatypes.Date,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.Date.fromstring,
@@ -439,7 +453,7 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_GYEAR,
         'datatype': datatypes.GregorianYear,
-        'python_type': (datatypes.GregorianYear, str),
+        'python_type': datatypes.GregorianYear,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianYear.fromstring,
@@ -447,7 +461,7 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_GYEAR_MONTH,
         'datatype': datatypes.GregorianYearMonth,
-        'python_type': (datatypes.GregorianYearMonth, str),
+        'python_type': datatypes.GregorianYearMonth,
         'admitted_facets': DATETIME_FACETS,
         'facets': [COLLAPSE_WHITE_SPACE_ELEMENT],
         'to_python': datatypes.GregorianYearMonth.fromstring,
@@ -456,7 +470,7 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DATE_TIME_STAMP,
         'datatype': datatypes.DateTimeStamp,
-        'python_type': (datatypes.DateTimeStamp, str),
+        'python_type': datatypes.DateTimeStamp,
         'base_type': nm.XSD_DATETIME,
         'to_python': datatypes.DateTime.fromstring,
         'facets': [Element(nm.XSD_EXPLICIT_TIMEZONE, value='required')],
@@ -464,14 +478,14 @@ XSD_11_BUILTIN_TYPES: tuple[dict[str, Any], ...] = XSD_COMMON_BUILTIN_TYPES + (
     {
         'name': nm.XSD_DAY_TIME_DURATION,
         'datatype': datatypes.DayTimeDuration,
-        'python_type': (datatypes.DayTimeDuration, str),
+        'python_type': datatypes.DayTimeDuration,
         'base_type': nm.XSD_DURATION,
         'to_python': datatypes.DayTimeDuration.fromstring,
     },  # PnYnMnDTnHnMnS with month a year equal to 0
     {
         'name': nm.XSD_YEAR_MONTH_DURATION,
         'datatype': datatypes.YearMonthDuration,
-        'python_type': (datatypes.YearMonthDuration, str),
+        'python_type': datatypes.YearMonthDuration,
         'base_type': nm.XSD_DURATION,
         'to_python': datatypes.YearMonthDuration.fromstring,
     },  # PnYnMnDTnHnMnS with day and time equals to 0
