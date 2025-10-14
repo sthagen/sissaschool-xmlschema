@@ -22,12 +22,13 @@ from elementpath import ElementPathError, XPathContext, XPathToken, \
 from elementpath.datatypes import UntypedAtomic
 from elementpath.xpath_nodes import EtreeElementNode
 
+import xmlschema.names as nm
 from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError
-from xmlschema.names import XSD_UNIQUE, XSD_KEY, XSD_KEYREF, XSD_SELECTOR, XSD_FIELD
 from xmlschema.translation import gettext as _
 from xmlschema.utils.qnames import get_qname, get_extended_qname
 from xmlschema.aliases import ElementType, SchemaType, NsmapType, AtomicValueType, \
     BaseXsdType, SchemaElementType, SchemaAttributeType
+from .helpers import parse_xpath_default_namespace
 from ..xpath import IdentityXPathParser, XPathElement, XMLSchemaProxy
 
 from .exceptions import XMLSchemaNotBuiltError
@@ -69,7 +70,7 @@ FieldDecoderType = Union[SchemaElementType, SchemaAttributeType]
 
 class XsdSelector(XsdComponent):
     """Class for defining an XPath selector for an XSD identity constraint."""
-    _ADMITTED_TAGS = XSD_SELECTOR,
+    _ADMITTED_TAGS = nm.XSD_SELECTOR,
     _REGEXP = (
         r"(\.//)?(((child::)?((\i\c*:)?(\i\c*|\*)))|\.)(/(((child::)?"
         r"((\i\c*:)?(\i\c*|\*)))|\.))*(\|(\.//)?(((child::)?((\i\c*:)?"
@@ -107,7 +108,7 @@ class XsdSelector(XsdComponent):
         # XSD 1.1 xpathDefaultNamespace attribute
         if self.schema.XSD_VERSION > '1.0':
             if 'xpathDefaultNamespace' in self.elem.attrib:
-                self.xpath_default_namespace = self._parse_xpath_default_namespace(self.elem)
+                self.xpath_default_namespace = parse_xpath_default_namespace(self)
             else:
                 self.xpath_default_namespace = self.schema.xpath_default_namespace
 
@@ -130,7 +131,7 @@ class XsdSelector(XsdComponent):
 
 class XsdFieldSelector(XsdSelector):
     """Class for defining an XPath field selector for an XSD identity constraint."""
-    _ADMITTED_TAGS = XSD_FIELD,
+    _ADMITTED_TAGS = nm.XSD_FIELD,
     _REGEXP = (
         r"(\.//)?((((child::)?((\i\c*:)?(\i\c*|\*)))|\.)/)*((((child::)?"
         r"((\i\c*:)?(\i\c*|\*)))|\.)|((attribute::|@)((\i\c*:)?(\i\c*|\*))))"
@@ -174,7 +175,7 @@ class XsdIdentity(XsdComponent):
             self.name = ''
 
         for child in self.elem:
-            if child.tag == XSD_SELECTOR:
+            if child.tag == nm.XSD_SELECTOR:
                 self.selector = XsdSelector(child, self.schema, self)
                 break
         else:
@@ -183,7 +184,7 @@ class XsdIdentity(XsdComponent):
 
         self.fields = []
         for child in self.elem:
-            if child.tag == XSD_FIELD:
+            if child.tag == nm.XSD_FIELD:
                 self.fields.append(XsdFieldSelector(child, self.schema, self))
 
         self.elements = {}
@@ -256,11 +257,11 @@ class XsdIdentity(XsdComponent):
 
 
 class XsdUnique(XsdIdentity):
-    _ADMITTED_TAGS = XSD_UNIQUE,
+    _ADMITTED_TAGS = nm.XSD_UNIQUE,
 
 
 class XsdKey(XsdIdentity):
-    _ADMITTED_TAGS = XSD_KEY,
+    _ADMITTED_TAGS = nm.XSD_KEY,
 
 
 class XsdKeyref(XsdIdentity):
@@ -270,7 +271,7 @@ class XsdKeyref(XsdIdentity):
     :ivar refer: reference to a *xs:key* declaration that must be in the same element \
     or in a descendant element.
     """
-    _ADMITTED_TAGS = XSD_KEYREF,
+    _ADMITTED_TAGS = nm.XSD_KEYREF,
     refer: Optional[Union[str, XsdKey]] = None
     refer_path = '.'
 
@@ -473,7 +474,7 @@ class FieldValueSelector:
         :param namespaces: is an optional mapping from namespace prefix to URI.
         """
         value: Union[AtomicValueType, list[Optional[AtomicValueType]], None] = None
-        element_node.schema = None
+        element_node.schema = None  # type: ignore[assignment]
         context = XPathContext(
             element_node,
             namespaces=namespaces,

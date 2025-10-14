@@ -11,7 +11,6 @@ import copy
 from abc import abstractmethod
 from collections import Counter
 from collections.abc import Callable, ItemsView, Iterator, Mapping, ValuesView, Iterable
-from copy import copy as shallow_copy
 from operator import attrgetter
 from types import MappingProxyType
 from typing import Any, cast, NamedTuple, Optional, Union, Type, TypeVar
@@ -25,11 +24,12 @@ from xmlschema.exceptions import XMLSchemaAttributeError, XMLSchemaKeyError, \
 from xmlschema.translation import gettext as _
 from xmlschema.utils.qnames import local_name, get_qname
 
-from .helpers import get_xsd_derivation_attribute
+from .helpers import parse_xsd_derivation
 from .exceptions import XMLSchemaCircularityError
 from .xsdbase import XsdComponent, XsdAnnotation
 from .builtins import BUILTIN_TYPES
-from .facets import XsdFacet, FACETS_CLASSES
+from .facets import XsdFacet, FACETS_CLASSES, XSD_10_FACETS, XSD_11_FACETS, \
+    XSD_11_LIST_FACETS, XSD_10_LIST_FACETS, XSD_11_UNION_FACETS, XSD_10_UNION_FACETS
 from .identities import XsdIdentity, XsdUnique, XsdKey, XsdKeyref, Xsd11Unique, \
     Xsd11Key, Xsd11Keyref
 from .simple_types import XsdSimpleType, XsdAtomicBuiltin, XsdAtomicRestriction, \
@@ -48,24 +48,13 @@ CT = TypeVar('CT', bound=XsdComponent)
 BuilderType = Callable[[ElementType, SchemaType, Optional[XsdComponent]], CT]
 
 # Elements for building dummy groups
-ATTRIBUTE_GROUP_ELEMENT = Element(nm.XSD_ATTRIBUTE_GROUP)
-ANY_ATTRIBUTE_ELEMENT = Element(
-    nm.XSD_ANY_ATTRIBUTE, attrib={'namespace': '##any', 'processContents': 'lax'}
-)
-SEQUENCE_ELEMENT = Element(nm.XSD_SEQUENCE)
-ANY_ELEMENT = Element(
-    nm.XSD_ANY,
-    attrib={
-        'namespace': '##any',
-        'processContents': 'lax',
-        'minOccurs': '0',
-        'maxOccurs': 'unbounded'
-    })
-
-GLOBAL_TAGS = frozenset((
-    nm.XSD_NOTATION, nm.XSD_SIMPLE_TYPE, nm.XSD_COMPLEX_TYPE,
-    nm.XSD_ATTRIBUTE, nm.XSD_ATTRIBUTE_GROUP, nm.XSD_GROUP, nm.XSD_ELEMENT
-))
+ANY_ATTRIBUTE_ATTRIB = {'namespace': '##any', 'processContents': 'lax'}
+ANY_ATTRIB = {
+    'namespace': '##any',
+    'processContents': 'lax',
+    'minOccurs': '0',
+    'maxOccurs': 'unbounded'
+}
 
 GLOBAL_MAP_INDEX = MappingProxyType({
     nm.XSD_SIMPLE_TYPE: 0,
@@ -105,7 +94,9 @@ class XsdBuilders:
                  'notation_class', 'attribute_group_class', 'complex_type_class',
                  'attribute_class', 'group_class', 'element_class', 'any_element_class',
                  'any_attribute_class', 'atomic_restriction_class', 'list_class',
-                 'union_class', 'unique_class', 'key_class', 'keyref_class')
+                 'union_class', 'unique_class', 'key_class', 'keyref_class',
+                 'annotation_class', 'admitted_facets', 'admitted_union_facets',
+                 'admitted_list_facets')
 
     def __init__(self, xsd_version: Optional[str] = None,
                  *facets_classes: Type[XsdFacet],
@@ -141,6 +132,7 @@ class XsdBuilders:
         self.notation_class = XsdNotation
         self.attribute_group_class = XsdAttributeGroup
         self.list_class = XsdList
+        self.annotation_class = XsdAnnotation
 
         if self._xsd_version == '1.0':
             self.complex_type_class = XsdComplexType
@@ -154,6 +146,9 @@ class XsdBuilders:
             self.unique_class = XsdUnique
             self.key_class = XsdKey
             self.keyref_class = XsdKeyref
+            self.admitted_facets = XSD_10_FACETS
+            self.admitted_union_facets = XSD_10_UNION_FACETS
+            self.admitted_list_facets = XSD_10_LIST_FACETS
         else:
             self.complex_type_class = Xsd11ComplexType
             self.attribute_class = Xsd11Attribute
@@ -166,6 +161,9 @@ class XsdBuilders:
             self.unique_class = Xsd11Unique
             self.key_class = Xsd11Key
             self.keyref_class = Xsd11Keyref
+            self.admitted_facets = XSD_11_FACETS
+            self.admitted_union_facets = XSD_11_UNION_FACETS
+            self.admitted_list_facets = XSD_11_LIST_FACETS
 
         self.identities = {
             nm.XSD_UNIQUE: self.unique_class,
@@ -222,18 +220,17 @@ class XsdBuilders:
         are set to 0 and 'unbounded'.
         """
         schema = parent.schema
-        group: XsdGroup = self.group_class(SEQUENCE_ELEMENT, schema, parent)
-
+        elem = Element(nm.XSD_SEQUENCE)
         if isinstance(any_element, XsdAnyElement):
-            particle = shallow_copy(any_element)
-            particle.min_occurs = 0
-            particle.max_occurs = None
-            particle.parent = group
-            group.append(particle)
+            attrib = any_element.elem.attrib.copy()
+            attrib['minOccurs'] = '0'
+            attrib['maxOccurs'] = 'unbounded'
+            elem.append(Element(nm.XSD_ANY, attrib))
         else:
-            group.append(self.any_element_class(ANY_ELEMENT, schema, group))
+            elem.append(Element(nm.XSD_ANY, ANY_ATTRIB))
 
-        return group
+        elem.text = elem[0].tail = '\n  '
+        return self.group_class(elem, schema, parent)
 
     def create_empty_content_group(self, parent: Union[XsdComplexType, XsdGroup],
                                    model: str = 'sequence', **attrib: Any) -> XsdGroup:
@@ -241,17 +238,17 @@ class XsdBuilders:
         Creates an empty local child content group for a complex type or a group.
         """
         if model == 'sequence':
-            group_elem = Element(nm.XSD_SEQUENCE, **attrib)
+            elem = Element(nm.XSD_SEQUENCE, attrib)
         elif model == 'choice':
-            group_elem = Element(nm.XSD_CHOICE, **attrib)
+            elem = Element(nm.XSD_CHOICE, attrib)
         elif model == 'all':
-            group_elem = Element(nm.XSD_ALL, **attrib)
+            elem = Element(nm.XSD_ALL, attrib)
         else:
             msg = _("'model' argument must be (sequence | choice | all)")
             raise XMLSchemaValueError(msg)
 
-        group_elem.text = '\n    '
-        return self.group_class(group_elem, parent.schema, parent)
+        elem.text = '\n    '
+        return self.group_class(elem, parent.schema, parent)
 
     def create_any_attribute_group(self, parent: Union[XsdComplexType, XsdElement]) \
             -> XsdAttributeGroup:
@@ -259,11 +256,13 @@ class XsdBuilders:
         Creates a local child attribute group for a complex type or an element
         that accepts any attribute.
         """
-        attribute_group = self.attribute_group_class(
-            ATTRIBUTE_GROUP_ELEMENT, parent.schema, parent
-        )
+        elem = Element(nm.XSD_ATTRIBUTE_GROUP)
+        elem.append(Element(nm.XSD_ANY_ATTRIBUTE, ANY_ATTRIBUTE_ATTRIB))
+        elem.text = elem[0].tail = '\n    '
+
+        attribute_group = self.attribute_group_class(elem, parent.schema, parent)
         attribute_group[None] = self.any_attribute_class(
-            ANY_ATTRIBUTE_ELEMENT, parent.schema, attribute_group
+            elem[0], parent.schema, attribute_group
         )
         return attribute_group
 
@@ -272,7 +271,9 @@ class XsdBuilders:
         """
         Creates an empty local child attribute group for a complex type or an element.
         """
-        return self.attribute_group_class(ATTRIBUTE_GROUP_ELEMENT, parent.schema, parent)
+        return self.attribute_group_class(
+            Element(nm.XSD_ATTRIBUTE_GROUP), parent.schema, parent
+        )
 
     def create_any_type(self, schema: SchemaType) -> XsdComplexType:
         """
@@ -284,19 +285,16 @@ class XsdBuilders:
         if schema.meta_schema is not None and schema.target_namespace != nm.XSD_NAMESPACE:
             schema = schema.meta_schema
 
-        any_type = self.complex_type_class(
-            elem=Element(nm.XSD_COMPLEX_TYPE, name=nm.XSD_ANY_TYPE),
-            schema=schema, parent=None, mixed=True, block='', final=''
-        )
-        assert isinstance(any_type.content, XsdGroup)
-        any_type.content.append(self.any_element_class(
-            ANY_ELEMENT, schema, any_type.content
-        ))
-        any_type.attributes[None] = self.any_attribute_class(
-            ANY_ATTRIBUTE_ELEMENT, schema, any_type.attributes
-        )
-        any_type.maps = any_type.content.maps = any_type.content[0].maps = \
-            any_type.attributes[None].maps = maps
+        elem = Element(nm.XSD_COMPLEX_TYPE, name=nm.XSD_ANY_TYPE)
+        elem.append(Element(nm.XSD_SEQUENCE))
+        elem[0].append(Element(nm.XSD_ANY, ANY_ATTRIB))
+        elem.append(Element(nm.XSD_ANY_ATTRIBUTE, ANY_ATTRIBUTE_ATTRIB))
+        elem.text = elem[0].tail = '\n  '
+        elem[0].text = elem[0][0].tail = '\n    '
+
+        any_type = self.complex_type_class(elem, schema, mixed=True, block='', final='')
+        for c in any_type.iter_components():
+            c.maps = maps
         return any_type
 
     def create_element(self, name: str,
@@ -361,10 +359,7 @@ class XsdBuilders:
                 xsd_type.name = None
 
         if 'final' in elem.attrib:
-            try:
-                xsd_type._final = get_xsd_derivation_attribute(elem, 'final')
-            except ValueError as err:
-                xsd_type.parse_error(err, elem)
+            xsd_type._final = parse_xsd_derivation(elem, 'final', validator=xsd_type)
 
         return xsd_type
 
@@ -402,14 +397,14 @@ class StagedMap(Mapping[str, CT]):
     def __repr__(self) -> str:
         return repr(self._store)
 
-    def copy(self) -> 'StagedMap[CT]':
+    def __copy__(self) -> 'StagedMap[CT]':
         obj = object.__new__(self.__class__)
         obj._builders = self._builders
         obj._staging = self._staging.copy()
         obj._store = self._store.copy()
         return obj
 
-    __copy__ = copy
+    copy = __copy__
 
     def clear(self) -> None:
         self._store.clear()
@@ -518,7 +513,7 @@ class StagedMap(Mapping[str, CT]):
             self._staging.pop(qname)
             return self._store[qname]
 
-        elif isinstance(obj, list):
+        else:
             # Not built XSD global component with redefinitions
             try:
                 elem, schema = obj[0]
@@ -544,10 +539,6 @@ class StagedMap(Mapping[str, CT]):
 
             return self._store[qname]
 
-        else:
-            msg = _("unexpected instance {!r} in XSD {} global map")
-            raise XMLSchemaTypeError(msg.format(obj, self.label))
-
 
 class TypesMap(StagedMap[BaseXsdType]):
 
@@ -559,10 +550,8 @@ class TypesMap(StagedMap[BaseXsdType]):
 
     def build_builtins(self, schema: SchemaType) -> None:
         if schema.meta_schema is not None and nm.XSD_ANY_TYPE in self._store:
-            # builtin types already provided, rebuild only xs:anyType for wildcards
-            self._store[nm.XSD_ANY_TYPE] = self._builders.create_any_type(schema)
+            # builtin types already provided
             return
-
         #
         # Special builtin types.
         #
@@ -749,7 +738,7 @@ class GlobalMaps(NamedTuple):
                             if schema.partial:
                                 redefinitions.append((qname, elem, child, schema, schema))
 
-                elif tag in GLOBAL_TAGS:
+                elif tag in nm.GLOBAL_TAGS:
                     try:
                         qname = ns_prefix + elem.attrib['name']
                     except KeyError:

@@ -701,7 +701,7 @@ class TestDecoding(XsdValidatorTestCase):
         # Check reverse encoding
         obj = schema.decode(xml_data, converter=JsonMLConverter)
         root = schema.encode(obj, converter=JsonMLConverter)
-        self.assertEqual(ElementTree.tostring(root), b'<root name="ns0:bar">ns0:foo</root>\n')
+        self.assertEqual(ElementTree.tostring(root), b'<root name="ns0:bar">ns0:foo</root>')
 
         with self.assertRaises(XMLSchemaValidationError) as ctx:
             schema.decode('<root name="ns0:bar">foo</root>')
@@ -807,11 +807,6 @@ class TestDecoding(XsdValidatorTestCase):
             {'@xmlns:col': 'http://example.com/ns/collection',
              '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
              '@xsi:schemaLocation': 'http://example.com/ns/collection collection.xsd'})
-
-        xmlschema.limits.MAX_XML_DEPTH = 1
-        with self.assertRaises(XMLSchemaValidationError):
-            schema.decode(self.col_xml_file)
-        xmlschema.limits.MAX_XML_DEPTH = 9999
 
         self.assertEqual(
             schema.decode(self.col_xml_file, max_depth=2),

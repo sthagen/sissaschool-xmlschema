@@ -152,7 +152,7 @@ def get_extended_qname(qname: str, namespaces: Optional[MutableMapping[str, str]
             return f'{{{uri}}}{name}' if uri else name
 
 
-def update_namespaces(namespaces: NsmapType,
+def update_namespaces(namespaces: dict[str, str],
                       xmlns: Iterable[tuple[str, str]],
                       root_declarations: bool = False) -> None:
     """
@@ -193,9 +193,12 @@ def update_namespaces(namespaces: NsmapType,
             namespaces[prefix] = uri
 
 
-def get_namespace_map(namespaces: Optional[NsmapType]) -> NsmapType:
+def get_namespace_map(namespaces: Optional[NsmapType]) -> dict[str, str]:
     """Returns a new and checked namespace map."""
-    namespaces = {k: v for k, v in namespaces.items()} if namespaces else {}
+    if namespaces is None:
+        return {}
+
+    namespaces = {k: v for k, v in namespaces.items()}
     if namespaces.get('xml', XML_NAMESPACE) != XML_NAMESPACE:
         msg = f"reserved prefix 'xml' can be used only for {XML_NAMESPACE!r} namespace"
         raise XMLSchemaValueError(msg)

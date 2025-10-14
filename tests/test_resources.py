@@ -194,9 +194,7 @@ class TestResources(XMLSchemaTestCase):
     # Tests on XMLResource instances
     def test_xml_resource_representation(self):
         resource = XMLResource(self.vh_xml_file)
-        self.assertTrue(str(resource).startswith(
-            "XMLResource(root=<Element '{http://example.com/vehicles}vehicles'"
-        ))
+        self.assertTrue(repr(resource).startswith("XMLResource(url='file:///"))
 
     def test_xml_resource_from_url(self):
         resource = XMLResource(self.vh_xml_file, lazy=True)
@@ -474,15 +472,12 @@ class TestResources(XMLSchemaTestCase):
 
         with self.assertRaises(XMLSchemaValueError) as ctx:
             XMLResource("https://xmlschema.test/vehicles.xsd", allow='sandbox')
-        self.assertEqual(str(ctx.exception),
-                         "block access to files out of sandbox requires 'base_url' to be set")
+        self.assertEqual(str(ctx.exception), "block access to files out of sandbox requires "
+                                             "'base_url' to be set or a local source URL")
 
-        with self.assertRaises(XMLSchemaValueError) as ctx:
-            XMLResource("/tmp/vehicles.xsd", allow='sandbox')
-        self.assertEqual(
-            str(ctx.exception),
-            "block access to files out of sandbox requires 'base_url' to be set",
-        )
+        resource = XMLResource(self.vh_xml_file, allow='sandbox')
+        self.assertTrue(resource.url.endswith('test_cases/examples/vehicles/vehicles.xml'))
+        self.assertTrue(resource.base_url.endswith('test_cases/examples/vehicles'))
 
         source = "/tmp/vehicles.xsd"
         with self.assertRaises(XMLResourceBlocked) as ctx:
@@ -495,11 +490,12 @@ class TestResources(XMLSchemaTestCase):
         with self.assertRaises(XMLSchemaTypeError) as ctx:
             XMLResource("https://xmlschema.test/vehicles.xsd", allow=None)
         self.assertEqual(str(ctx.exception),
-                         "invalid type <class 'NoneType'> for argument 'allow'")
+                         "invalid type <class 'NoneType'> for optional argument "
+                         "'allow', must be a <class 'str'> instance")
 
         with self.assertRaises(XMLSchemaValueError) as ctx:
             XMLResource("https://xmlschema.test/vehicles.xsd", allow='any')
-        self.assertIn("invalid value 'any' for argument 'allow'", str(ctx.exception))
+        self.assertIn("invalid value 'any' for optional argument 'allow'", str(ctx.exception))
 
         with self.assertRaises(XMLResourceBlocked) as ctx:
             XMLResource(self.vh_xml_file, allow='none')

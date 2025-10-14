@@ -377,15 +377,17 @@ class TestXMLSchema10(XsdValidatorTestCase):
         # With string argument
         with self.assertRaises(ValueError) as ctx:
             self.schema_class(self.vh_xsd_file, loglevel='all')
-        self.assertEqual(str(ctx.exception), "'all' is not a valid loglevel")
+        self.assertIn("invalid value 'all' for optional argument 'loglevel'",
+                      str(ctx.exception))
 
         with self.assertLogs('xmlschema', level='INFO') as ctx:
             self.schema_class(self.vh_xsd_file, loglevel='INFO')
         self.assertEqual(len(ctx.output), 7)
 
-        with self.assertLogs('xmlschema', level='INFO') as ctx:
+        with self.assertRaises(ValueError) as ctx:
             self.schema_class(self.vh_xsd_file, loglevel='  Info ')
-        self.assertEqual(len(ctx.output), 7)
+        self.assertIn("invalid value '  Info ' for optional argument 'loglevel'",
+                      str(ctx.exception))
 
     def test_target_namespace(self):
         schema = self.schema_class(dedent("""\
@@ -494,7 +496,7 @@ class TestXMLSchema10(XsdValidatorTestCase):
 
         with self.assertRaises(TypeError) as ctx:
             self.schema_class(self.col_schema, global_maps=col_schema)  # noqa
-        self.assertIn(" for argument 'source'", str(ctx.exception))
+        self.assertIn(" for non-default argument 'source'", str(ctx.exception))
 
         schema = self.schema_class(source, global_maps=col_schema.maps)
         self.assertIs(col_schema.maps, schema.maps)

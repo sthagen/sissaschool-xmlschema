@@ -21,7 +21,7 @@ from xmlschema.aliases import ModelGroupType, ModelParticleType, SchemaElementTy
     OccursCounterType
 from xmlschema.exceptions import XMLSchemaRuntimeError, XMLSchemaTypeError, XMLSchemaValueError
 from xmlschema.translation import gettext as _
-from xmlschema import limits
+from xmlschema import _limits
 
 from .exceptions import XMLSchemaModelError, XMLSchemaModelDepthError
 from .wildcards import XsdAnyElement, Xsd11AnyElement
@@ -116,7 +116,7 @@ def check_model(group: ModelGroupType) -> None:
                     current_path.append(item)
                     iterators.append(particles)
                     particles = iter(item)
-                    if len(iterators) > limits.MAX_MODEL_DEPTH:
+                    if len(iterators) > _limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(group)
                     break
                 else:
@@ -130,6 +130,7 @@ def check_model(group: ModelGroupType) -> None:
 
     paths: Any = {}
     current_path: list[ModelParticleType] = [group]
+
     try:
         any_element = group.parent.open_content.any_element  # type: ignore[union-attr]
     except AttributeError:
@@ -440,7 +441,7 @@ class ModelVisitor:
                     stack.append((group, particles))
                     group = item
                     particles = iter(item.content)
-                    if len(stack) > limits.MAX_MODEL_DEPTH:
+                    if len(stack) > _limits.MAX_MODEL_DEPTH:
                         raise XMLSchemaModelDepthError(self.group)
                     break
 

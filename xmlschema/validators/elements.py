@@ -23,26 +23,24 @@ from elementpath import XPath2Parser, ElementPathError, XPathContext, XPathToken
 from elementpath.datatypes import AbstractDateTime, Duration
 from elementpath.xpath_nodes import EtreeElementNode
 
+import xmlschema.names as nm
 from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError, \
     XMLResourceParseError
-from xmlschema.names import XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE, XSD_ALTERNATIVE, \
-    XSD_ELEMENT, XSD_ANY_TYPE, XSI_NIL, XSI_TYPE, XSD_ERROR, XSD_NOTATION_TYPE, \
-    XSD_ANNOTATION
 from xmlschema.aliases import ElementType, BaseXsdType, SchemaElementType, \
     ModelParticleType, ComponentClassType, DecodeType, DecodedValueType
 from xmlschema.translation import gettext as _
-from xmlschema.utils.etree import etree_iter_location_hints, etree_iter_namespaces
+from xmlschema.utils.etree import iter_schema_location_hints, iter_schema_namespaces
 from xmlschema.utils.decoding import Empty, raw_encode_attributes, strictly_equal
 from xmlschema.utils.qnames import get_qname
+from xmlschema.arguments import XSD_VALIDATION_MODES
 from xmlschema import dataobjects
-from xmlschema.converters import ElementData, XMLSchemaConverter
+from xmlschema.converters import ElementData
 from xmlschema.xpath import XMLSchemaProxy, ElementPathMixin, XPathElement
 
 from .exceptions import XMLSchemaValidationError, XMLSchemaParseError, \
     XMLSchemaStopValidation, XMLSchemaTypeTableWarning
-from .validation import XSD_VALIDATION_MODES, DecodeContext, \
-    EncodeContext, ValidationMixin
-from .helpers import get_xsd_derivation_attribute
+from .validation import ValidationContext, DecodeContext, EncodeContext, ValidationMixin
+from .helpers import parse_xsd_derivation, parse_xpath_default_namespace
 from .xsdbase import XSD_TYPE_DERIVATIONS, XSD_ELEMENT_DERIVATIONS, XsdComponent
 from .particles import ParticleMixin, OccursCalculator
 from .identities import XsdIdentity, XsdKeyref, KeyrefCounter, FieldValueSelector
@@ -51,8 +49,8 @@ from .attributes import XsdAttribute
 from .wildcards import XsdAnyElement
 
 if TYPE_CHECKING:
-    from .attributes import XsdAttributeGroup
-    from .groups import XsdGroup
+    from .attributes import XsdAttributeGroup  # noqa: F401
+    from .groups import XsdGroup  # noqa: F401
 
 DataBindingType = Type['dataobjects.DataElement']
 
@@ -86,6 +84,7 @@ class XsdElement(XsdComponent, ParticleMixin,
     local_name: str
     qualified_name: str
     prefixed_name: str
+    target_namespace: str
 
     parent: Optional['XsdGroup']
     ref: Optional['XsdElement']
@@ -130,7 +129,7 @@ class XsdElement(XsdComponent, ParticleMixin,
     alternatives: Union[tuple[()], list['XsdAlternative']] = ()
     inheritable: Union[tuple[()], dict[str, XsdAttribute]] = ()
 
-    _ADMITTED_TAGS = XSD_ELEMENT,
+    _ADMITTED_TAGS = nm.XSD_ELEMENT,
     _block: Optional[str] = None
     _final: Optional[str] = None
 
@@ -196,7 +195,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             try:
                 xsd_element: XsdElement = self.maps.elements[self.name]
             except KeyError:
-                self._set_type(self.any_type)
+                self._set_type(self.maps.any_type)
                 self.parse_error(_('unknown element %r') % self.name)
             else:
                 self.ref = xsd_element
@@ -244,24 +243,18 @@ class XsdElement(XsdComponent, ParticleMixin,
                 self.abstract = True
 
         if 'block' in attrib:
-            try:
-                self._block = get_xsd_derivation_attribute(
-                    self.elem, 'block', XSD_ELEMENT_DERIVATIONS
-                )
-            except ValueError as err:
-                self.parse_error(err)
+            self._block = parse_xsd_derivation(
+                self.elem, 'block', XSD_ELEMENT_DERIVATIONS, self
+            )
 
         if 'nillable' in attrib and attrib['nillable'].strip() in ('true', '1'):
             self.nillable = True
 
         if self.parent is None:
             if 'final' in attrib:
-                try:
-                    self._final = get_xsd_derivation_attribute(
-                        self.elem, 'final', XSD_TYPE_DERIVATIONS
-                    )
-                except ValueError as err:
-                    self.parse_error(err)
+                self._final = parse_xsd_derivation(
+                    self.elem, 'final', XSD_TYPE_DERIVATIONS, self
+                )
 
             for attr_name in ('ref', 'form', 'minOccurs', 'maxOccurs'):
                 if attr_name in attrib:
@@ -280,31 +273,31 @@ class XsdElement(XsdComponent, ParticleMixin,
                 extended_name = self.schema.resolve_qname(type_name)
             except (KeyError, ValueError, RuntimeError) as err:
                 self.parse_error(err)
-                self._set_type(self.any_type)
+                self._set_type(self.maps.any_type)
             else:
-                if extended_name == XSD_ANY_TYPE:
-                    self._set_type(self.any_type)
+                if extended_name == nm.XSD_ANY_TYPE:
+                    self._set_type(self.maps.any_type)
                 else:
                     try:
                         self._set_type(self.maps.types[extended_name])
                     except KeyError:
                         self.parse_error(_('unknown type {!r}').format(type_name))
-                        self._set_type(self.any_type)
+                        self._set_type(self.maps.any_type)
             finally:
                 child = self._parse_child_component(self.elem, strict=False)
-                if child is not None and child.tag in (XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE):
+                if child is not None and child.tag in nm.GLOBAL_TYPES_TAGS:
                     msg = _("the attribute 'type' and a xs:{} local "
                             "declaration are mutually exclusive")
                     self.parse_error(msg.format(child.tag.split('}')[-1]))
         elif (child := self._parse_child_component(self.elem, strict=False)) is None:
-            self._set_type(self.any_type)
+            self._set_type(self.maps.any_type)
         else:
             try:
                 self._set_type(
                     self.builders.local_types[child.tag](child, self.schema, self)
                 )
             except KeyError:
-                self._set_type(self.any_type)
+                self._set_type(self.maps.any_type)
 
     def _parse_constraints(self) -> None:
         # Value constraints
@@ -335,31 +328,24 @@ class XsdElement(XsdComponent, ParticleMixin,
         # Identity constraints
         self.identities = []
         for child in self.elem:
-            if child.tag in (XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE, XSD_ANNOTATION):
-                continue
-
-            try:
+            if child.tag in nm.IDENTITY_TAGS:
                 identity = self.builders.identities[child.tag](child, self.schema, self)
-            except KeyError:
-                # Invalid tags already caught by validation against the meta-schema
-                continue
+                if identity.ref:
+                    if any(identity.name == x.name for x in self.identities):
+                        msg = _("duplicated identity constraint %r:")
+                        self.parse_error(msg % identity.name, child)
 
-            if identity.ref:
-                if any(identity.name == x.name for x in self.identities):
-                    msg = _("duplicated identity constraint %r:")
-                    self.parse_error(msg % identity.name, child)
+                    self.identities.append(identity)
+                    continue
 
-                self.identities.append(identity)
-                continue
-
-            try:
-                if child != self.maps.identities[identity.name].elem:
-                    msg = _("duplicated identity constraint %r:")
-                    self.parse_error(msg % identity.name, child)
-            except KeyError:
-                self.maps.identities[identity.name] = identity
-            finally:
-                self.identities.append(identity)
+                try:
+                    if child != self.maps.identities[identity.name].elem:
+                        msg = _("duplicated identity constraint %r:")
+                        self.parse_error(msg % identity.name, child)
+                except KeyError:
+                    self.maps.identities[identity.name] = identity
+                finally:
+                    self.identities.append(identity)
 
     def _parse_substitution_group(self, substitution_group: str) -> None:
         try:
@@ -388,8 +374,8 @@ class XsdElement(XsdComponent, ParticleMixin,
                 return
 
         final = head_element.final
-        if self.type.name == XSD_ANY_TYPE and 'type' not in self.elem.attrib:
-            if head_element.type.name != XSD_ANY_TYPE:
+        if self.type.name == nm.XSD_ANY_TYPE and 'type' not in self.elem.attrib:
+            if head_element.type.name != nm.XSD_ANY_TYPE:
                 # Set the type with head element's type for validate content
                 # ref: https://www.w3.org/TR/xmlschema-1/#cElement_Declarations
                 self.type = head_element.type
@@ -501,8 +487,8 @@ class XsdElement(XsdComponent, ParticleMixin,
                                 dataobjects.DataBindingMeta(class_name, bases, attrs))
         return self.binding
 
-    def get_type(self, elem: Union[ElementType, ElementData],
-                 inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
+    def get_alternative_type(self, elem: Union[ElementType, ElementData],
+                             inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
         return self.type
 
     def get_attributes(self, xsd_type: BaseXsdType) -> 'XsdAttributeGroup':
@@ -572,12 +558,12 @@ class XsdElement(XsdComponent, ParticleMixin,
         return self.type.text_decode(text)
 
     def check_dynamic_context(self, elem: ElementType, validation: str,
-                              context: DecodeContext) -> None:
-        for ns, url in etree_iter_location_hints(elem):
+                              context: ValidationContext) -> None:
+        for ns, url in iter_schema_location_hints(elem):
             if self.maps.get_schema(ns, url, context.source.base_url) is not None:
                 continue
 
-            if ns in etree_iter_namespaces(context.source.root, elem):
+            if ns in iter_schema_namespaces(context.source.root, elem):
                 reason = _("schemaLocation declaration after namespace start")
                 context.validation_error(validation, self, reason, elem)
 
@@ -599,7 +585,7 @@ class XsdElement(XsdComponent, ParticleMixin,
             except OSError:
                 continue
 
-    def raw_decode(self, obj: ElementType, validation: str, context: DecodeContext) -> Any:
+    def raw_decode(self, obj: ElementType, validation: str, context: ValidationContext) -> Any:
         """
         Decode an Element instance.
 
@@ -647,24 +633,27 @@ class XsdElement(XsdComponent, ParticleMixin,
 
         if not context.level:
             # Need to set converter context with the right object (the resource can be lazy)
-            context.converter.set_context(obj, context.level)
+            context.converter.set_xmlns_context(obj, context.level)
         elif context.use_location_hints:
             # Use location hints for dynamic schema load
             self.check_dynamic_context(obj, validation, context)
 
-        converter = context.converter
         inherited = context.inherited
         value = content = None
         nilled = False
 
-        # Get the instance effective type
-        xsd_type = self.get_type(obj, inherited)
-        if XSI_TYPE in obj.attrib and self.schema.meta_schema is not None:
+        if not self.alternatives:
+            xsd_type = self.type
+        else:
+            xsd_type = self.get_alternative_type(obj, inherited)
+
+        if nm.XSI_TYPE in obj.attrib and self.schema.meta_schema is not None:
             # Meta-schema elements ignore xsi:type (issue #350)
-            type_name = obj.attrib[XSI_TYPE].strip()
-            namespaces = converter.namespaces
+            type_name = obj.attrib[nm.XSI_TYPE].strip()
             try:
-                xsd_type = self.maps.get_instance_type(type_name, xsd_type, namespaces)
+                xsd_type = self.maps.get_instance_type(
+                    type_name, xsd_type, context.namespaces
+                )
             except (KeyError, TypeError) as err:
                 context.validation_error(validation, self, err, obj)
             else:
@@ -712,8 +701,8 @@ class XsdElement(XsdComponent, ParticleMixin,
             context.inherited = inherited
 
         # Checks the xsi:nil attribute of the instance
-        if XSI_NIL in obj.attrib:
-            xsi_nil = obj.attrib[XSI_NIL].strip()
+        if nm.XSI_NIL in obj.attrib:
+            xsi_nil = obj.attrib[nm.XSI_NIL].strip()
             if not self.nillable:
                 reason = _("element is not nillable")
                 context.validation_error(validation, self, reason, obj)
@@ -783,7 +772,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     value = text
 
             elif xsd_type.is_notation():
-                if xsd_type.name == XSD_NOTATION_TYPE:
+                if xsd_type.name == nm.XSD_NOTATION_TYPE:
                     msg = _("cannot validate against xs:NOTATION directly, "
                             "only against a subtype with an enumeration facet")
                     context.validation_error(validation, self, msg, text)
@@ -792,36 +781,41 @@ class XsdElement(XsdComponent, ParticleMixin,
                     context.validation_error(validation, self, msg, text)
 
             result = content_decoder.raw_decode(text or '', validation, context)
-            if result is None and context.filler is not None:
-                value = context.filler(self)
-            elif text or context.keep_empty:
+            if not isinstance(context, DecodeContext):
                 value = result
-
-            if context.value_hook is not None:
-                value = context.value_hook(value, xsd_type)
-            elif isinstance(value, context.keep_datatypes) or value is None:
-                pass
-            elif isinstance(value, str):
-                if value[:1] == '{' and xsd_type.is_qname():
-                    value = text
-            elif isinstance(value, Decimal):
-                if context.decimal_type is not None:
-                    value = context.decimal_type(value)
-            elif isinstance(value, (AbstractDateTime, Duration)):
-                value = str(value) if text is None else text.strip()
             else:
-                value = str(value)
+                if result is None and context.filler is not None:
+                    value = context.filler(self)
+                elif text or context.keep_empty:
+                    value = result
+
+                if context.value_hook is not None:
+                    value = context.value_hook(value, xsd_type)
+                elif isinstance(value, context.keep_datatypes) or value is None:
+                    pass
+                elif isinstance(value, str):
+                    if value[:1] == '{' and xsd_type.is_qname():
+                        value = text
+                elif isinstance(value, Decimal):
+                    if context.decimal_type is not None:
+                        value = context.decimal_type(value)
+                elif isinstance(value, (AbstractDateTime, Duration)):
+                    value = str(value) if text is None else text.strip()
+                else:
+                    value = str(value)
 
         context.id_list = id_list
-        xmlns = converter.set_context(obj, context.level)  # Purge existing sub-contexts
+        xmlns = context.converter.set_xmlns_context(obj, context.level)  # Purge sub-contexts
 
-        if isinstance(converter, XMLSchemaConverter):
+        if isinstance(context, DecodeContext):
             element_data = ElementData(obj.tag, value, content, attributes, xmlns)
             if context.element_hook is not None:
                 element_data = context.element_hook(element_data, self, xsd_type)
 
             try:
-                result = converter.element_decode(element_data, self, xsd_type, context.level)
+                result = context.converter.element_decode(
+                    element_data, self, xsd_type, context.level
+                )
             except (ValueError, TypeError) as err:
                 context.validation_error(validation, self, err, obj)
                 result = None
@@ -863,11 +857,10 @@ class XsdElement(XsdComponent, ParticleMixin,
         return result
 
     def collect_key_fields(self, obj: ElementType, xsd_type: BaseXsdType,
-                           validation: str, nilled: bool, context: DecodeContext) -> None:
+                           validation: str, nilled: bool, context: ValidationContext) -> None:
 
         element_node: Union[EtreeElementNode, LazyElementNode]
         element_node = cast(EtreeElementNode, context.source.get_xpath_node(obj))
-        namespaces = context.namespaces
 
         xsd_element = self if self.ref is None else self.ref
         if xsd_element.type is not xsd_type:
@@ -903,7 +896,9 @@ class XsdElement(XsdComponent, ParticleMixin,
                 selectors = [FieldValueSelector(f, xsd_element) for f in identity.fields]
 
             try:
-                fields = tuple(s.get_value(element_node, namespaces) for s in selectors)
+                fields = tuple(
+                    s.get_value(element_node, context.namespaces) for s in selectors
+                )
             except (XMLSchemaValueError, XMLSchemaTypeError) as err:
                 context.validation_error(validation, self, err, obj)
             else:
@@ -951,8 +946,11 @@ class XsdElement(XsdComponent, ParticleMixin,
         if context.max_depth is not None and context.max_depth == 0 and not context.level:
             return None
 
+        tag, text, content, attributes, xmlns = element_data
+        context.elem = elem = context.create_element(tag)
+
         if self.abstract:
-            if self.name == element_data.tag and context.converter.losslessly:
+            if self.name == tag and context.converter.losslessly:
                 reason = _("can't use an abstract element in an instance")
                 context.validation_error(validation, self, reason, obj)
             elif self.name not in self.maps.substitution_groups:
@@ -961,7 +959,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 context.validation_error(validation, self, reason, obj)
             else:
                 for xsd_element in self.iter_substitutes():
-                    if element_data.tag == xsd_element.name:
+                    if tag == xsd_element.name:
                         return xsd_element.raw_encode(obj, validation, context)
                 else:
                     # In some cases the original tag could be missed, so try each
@@ -972,14 +970,16 @@ class XsdElement(XsdComponent, ParticleMixin,
                         reason = _("can't use an abstract XSD element for validation")
                         context.validation_error(validation, self, reason, obj)
 
-        elem = context.create_element(element_data.tag)
+        if not self.alternatives:
+            xsd_type = self.type
+        else:
+            xsd_type = self.get_alternative_type(element_data)
 
-        xsd_type = self.get_type(element_data)
-        if XSI_TYPE in element_data.attributes and self.schema.meta_schema is not None:
-            type_name = element_data.attributes[XSI_TYPE].strip()
+        if nm.XSI_TYPE in attributes and self.schema.meta_schema is not None:
+            type_name = attributes[nm.XSI_TYPE].strip()
             try:
                 xsd_type = self.maps.get_instance_type(
-                    type_name, xsd_type, context.converter
+                    type_name, xsd_type, context.namespaces
                 )
             except (KeyError, TypeError) as err:
                 errors.append(err)
@@ -989,7 +989,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                     # Adjust attributes mapped into default namespace
 
                     ns_part = f'{{{default_namespace}}}'
-                    for k in list(element_data.attributes):
+                    for k in list(attributes):
                         if not k.startswith(ns_part):
                             continue
                         elif k in xsd_type.attributes:
@@ -997,28 +997,21 @@ class XsdElement(XsdComponent, ParticleMixin,
 
                         local_name = k[len(ns_part):]
                         if local_name in xsd_type.attributes:
-                            element_data.attributes[local_name] = element_data.attributes[k]
-                            del element_data.attributes[k]
+                            attributes[local_name] = attributes[k]
+                            del attributes[k]
 
         attribute_group = self.get_attributes(xsd_type)
         context.level += 1
         try:
-            attributes = attribute_group.raw_encode(
-                element_data.attributes, validation, context
-            )
-        except XMLSchemaValidationError as err:
-            errors.append(err)
-            elem.attrib.update(
-                raw_encode_attributes(element_data.attributes)
-            )
-        else:
-            if attributes:
-                elem.attrib.update(attributes)
-        finally:
-            context.level -= 1
+            elem.attrib.update(attribute_group.raw_encode(attributes, validation, context))
+        except XMLSchemaValidationError:
+            elem.attrib.update(raw_encode_attributes(attributes))
+            raise
 
-        if XSI_NIL in element_data.attributes:
-            xsi_nil = element_data.attributes[XSI_NIL].strip()
+        context.level -= 1
+
+        if nm.XSI_NIL in attributes:
+            xsi_nil = attributes[nm.XSI_NIL].strip()
             if not self.nillable:
                 errors.append("element is not nillable.")
             elif xsi_nil not in ('0', '1', 'true', 'false'):
@@ -1027,7 +1020,7 @@ class XsdElement(XsdComponent, ParticleMixin,
                 pass
             elif self.fixed is not None:
                 errors.append("xsi:nil='true' but the element has a fixed value.")
-            elif element_data.text not in (None, '') or element_data.content:
+            elif text not in (None, '') or content:
                 errors.append("xsi:nil='true' but the element is not empty.")
             else:
                 for e in errors:
@@ -1035,12 +1028,12 @@ class XsdElement(XsdComponent, ParticleMixin,
                 return elem
 
         if isinstance(xsd_type, XsdSimpleType):
-            if element_data.content:
-                errors.append("a simpleType element can't has child elements.")
+            if content:
+                errors.append("a simpleType element can't have child elements.")
 
-            if element_data.text is not None:
+            if text is not None:
                 try:
-                    elem.text = xsd_type.raw_encode(element_data.text, validation, context)
+                    elem.text = xsd_type.raw_encode(text, validation, context)
                 except XMLSchemaValidationError as err:
                     if err.elem is not None:
                         raise
@@ -1054,11 +1047,9 @@ class XsdElement(XsdComponent, ParticleMixin,
         elif isinstance(xsd_type.content, XsdSimpleType):
             if xsd_type.content.max_length == 0:
                 pass
-            elif element_data.text is not None:
+            elif text is not None:
                 try:
-                    elem.text = xsd_type.content.raw_encode(
-                        element_data.text, validation, context
-                    )
+                    elem.text = xsd_type.content.raw_encode(text, validation, context)
                 except XMLSchemaValidationError as err:
                     if err.elem is not None:
                         raise
@@ -1071,12 +1062,8 @@ class XsdElement(XsdComponent, ParticleMixin,
 
         else:
             context.level += 1
-            try:
-                xsd_type.content.raw_encode(element_data, validation, context)
-            except XMLSchemaValidationError as err:
-                errors.append(err)
-            finally:
-                context.level -= 1
+            xsd_type.content.raw_encode(element_data, validation, context)
+            context.level -= 1
 
         if errors:
             for e in errors:
@@ -1118,7 +1105,7 @@ class XsdElement(XsdComponent, ParticleMixin,
         xsd_group = self.type.model_group
         if xsd_group is None:
             # fallback to xs:anyType encoder for matching extra content
-            xsd_group = self.any_type.model_group
+            xsd_group = self.maps.any_type.model_group
             assert xsd_group is not None
 
         for xsd_child in xsd_group.iter_elements():
@@ -1291,7 +1278,8 @@ class Xsd11Element(XsdElement):
                 for substitution_group in self.elem.attrib['substitutionGroup'].split():
                     self._parse_substitution_group(substitution_group)
 
-        self._parse_target_namespace()
+        if 'targetNamespace' in self.elem.attrib:
+            self._parse_target_namespace()
 
         if any(v.inheritable for v in self.attributes.values()):
             self.inheritable = {}
@@ -1304,7 +1292,7 @@ class Xsd11Element(XsdElement):
         alternatives = []
         has_test = True
         for child in self.elem:
-            if child.tag == XSD_ALTERNATIVE:
+            if child.tag == nm.XSD_ALTERNATIVE:
                 alternatives.append(XsdAlternative(child, self.schema, self))
                 if not has_test:
                     msg = _("test attribute missing in non-final alternative")
@@ -1337,11 +1325,8 @@ class Xsd11Element(XsdElement):
                     yield xsd_element
                     yield from xsd_element.iter_substitutes()
 
-    def get_type(self, elem: Union[ElementType, ElementData],
-                 inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
-        if not self.alternatives:
-            return self.type
-
+    def get_alternative_type(self, elem: Union[ElementType, ElementData],
+                             inherited: Optional[dict[str, Any]] = None) -> BaseXsdType:
         if isinstance(elem, ElementData):
             if elem.attributes:
                 attrib = raw_encode_attributes(elem.attributes)
@@ -1416,8 +1401,8 @@ class Xsd11Element(XsdElement):
         return True
 
     def check_dynamic_context(self, elem: ElementType, validation: str,
-                              context: DecodeContext) -> None:
-        for ns, url in etree_iter_location_hints(elem):
+                              context: ValidationContext) -> None:
+        for ns, url in iter_schema_location_hints(elem):
             if self.maps.get_schema(ns, url, context.source.base_url) is not None:
                 continue
 
@@ -1469,7 +1454,7 @@ class XsdAlternative(XsdComponent):
     type: BaseXsdType
     path: Optional[str]
     token: Optional[XPathToken]
-    _ADMITTED_TAGS = XSD_ALTERNATIVE,
+    _ADMITTED_TAGS = nm.XSD_ALTERNATIVE,
 
     __slots__ = ('xpath_default_namespace', 'path', 'token', 'type')
 
@@ -1492,7 +1477,7 @@ class XsdAlternative(XsdComponent):
         attrib = self.elem.attrib
 
         if 'xpathDefaultNamespace' in attrib:
-            self.xpath_default_namespace = self._parse_xpath_default_namespace(self.elem)
+            self.xpath_default_namespace = parse_xpath_default_namespace(self)
         else:
             self.xpath_default_namespace = self.schema.xpath_default_namespace
 
@@ -1520,10 +1505,10 @@ class XsdAlternative(XsdComponent):
         except (KeyError, ValueError, RuntimeError) as err:
             if 'type' in attrib:
                 self.parse_error(err)
-                self.type = self.any_type
+                self.type = self.maps.any_type
             elif (child := self._parse_child_component(self.elem, strict=False)) is None:
                 self.parse_error(_("missing 'type' attribute"))
-                self.type = self.any_type
+                self.type = self.maps.any_type
             else:
                 try:
                     self.type = self.builders.local_types[child.tag](
@@ -1531,7 +1516,7 @@ class XsdAlternative(XsdComponent):
                     )
                 except KeyError:
                     self.parse_error(_("missing 'type' attribute"))
-                    self.type = self.any_type
+                    self.type = self.maps.any_type
                 else:
                     if not self.type.is_derived(self.parent.type):
                         msg = _("declared type is not derived from {!r}")
@@ -1541,14 +1526,14 @@ class XsdAlternative(XsdComponent):
                 self.type = self.maps.types[type_qname]
             except KeyError:
                 self.parse_error(_("unknown type {!r}").format(attrib['type']))
-                self.type = self.any_type
+                self.type = self.maps.any_type
             else:
-                if self.type.name != XSD_ERROR and not self.type.is_derived(self.parent.type):
+                if self.type.name != nm.XSD_ERROR and not self.type.is_derived(self.parent.type):
                     msg = _("type {0!r} is not derived from {1!r}")
                     self.parse_error(msg.format(attrib['type'], self.parent.type))
 
                 child = self._parse_child_component(self.elem, strict=False)
-                if child is not None and child.tag in (XSD_COMPLEX_TYPE, XSD_SIMPLE_TYPE):
+                if child is not None and child.tag in nm.GLOBAL_TYPES_TAGS:
                     msg = _("the attribute 'type' and the xs:%s local "
                             "declaration are mutually exclusive")
                     self.parse_error(msg % child.tag.split('}')[-1])

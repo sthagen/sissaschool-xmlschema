@@ -21,30 +21,30 @@ from urllib.parse import urlsplit, unquote
 from urllib.error import URLError
 from xml.etree import ElementTree
 
-from xmlschema.aliases import ElementType, EtreeType, NsmapType, \
+from xmlschema.aliases import SettingsType, ElementType, EtreeType, NsmapType, \
     NormalizedLocationsType, LocationsType, XMLSourceType, IOType, \
-    LazyType, IterParseType, UriMapperType
+    LazyType, IterParseType, UriMapperType, BaseUrlType, BlockType
 from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaValueError, \
     XMLResourceError, XMLResourceOSError, XMLResourceBlocked
 from xmlschema.utils.paths import LocationPath
-from xmlschema.utils.etree import is_etree_element, etree_tostring, etree_iter_location_hints
+from xmlschema.utils.etree import is_etree_element, etree_tostring, iter_schema_location_hints
 from xmlschema.utils.misc import iter_class_slots
 from xmlschema.utils.streams import is_file_object
 from xmlschema.utils.qnames import update_namespaces, get_namespace_map
 from xmlschema.utils.urls import is_url, is_remote_url, is_local_url, normalize_url, \
     normalize_locations
-from xmlschema.utils.descriptors import Argument
 from xmlschema.xpath import ElementSelector
+from xmlschema.arguments import Argument, SourceArgument, BaseUrlOption, \
+    AllowOption, BlockOption, DefuseOption, PositiveIntOption, UriMapperOption, \
+    OpenerOption, SelectorOption
 
 from .sax import defuse_xml
-from .arguments import SourceArgument, BaseUrlArgument, AllowArgument, DefuseArgument, \
-    TimeoutArgument, UriMapperArgument, OpenerArgument, SelectorArgument
 from .xml_loader import XMLResourceLoader
 
 
 class XMLResourceManager:
     """A context manager for XML resources."""
-    def __init__(self, resource: 'XMLResource'):
+    def __init__(self, resource: 'XMLResource') -> None:
         self.resource = resource
 
     def __enter__(self) -> 'XMLResourceManager':
@@ -79,12 +79,16 @@ class XMLResource(XMLResourceLoader):
     it defuses unparsed data except local files. With 'never' no XML data source is defused.
     :param timeout: the timeout in seconds for the connection attempt in case of remote data.
     :param lazy: if a value `False` or 0 is provided the XML data is fully loaded into and \
-    processed from memory. When a resource is lazy only the root element of the source is \
+    processed in memory. When a resource is lazy only the root element of the source is \
     loaded. A positive integer also defines the depth at which the lazy resource can be \
     better iterated (`True` means 1).
     :param thin_lazy: for default, in order to reduce the memory usage, during the \
     iteration of a lazy resource at *lazy_depth* level, deletes also the preceding \
     elements after the use.
+    :param block: defines which types of sources are blocked for security reasons. \
+    For default none of possible types are blocked. Provide a space separated string of \
+    words, choosing between 'text', 'file', 'io', 'url' and 'tree' or a tuple of them to \
+    select which types are blocked.
     :param uri_mapper: an optional URI mapper for using relocated or URN-addressed \
     resources. Can be a dictionary or a function that takes the URI string and returns \
     a URL, or the argument if there is no mapping for it.
@@ -97,13 +101,15 @@ class XMLResource(XMLResourceLoader):
     """
     # Descriptor-based attributes for arguments
     source = SourceArgument()
-    base_url = BaseUrlArgument()
-    allow = AllowArgument()
-    defuse = DefuseArgument()
-    timeout = TimeoutArgument()
-    uri_mapper = UriMapperArgument()
-    opener = OpenerArgument()
-    selector = SelectorArgument()
+
+    base_url = BaseUrlOption(default=None)
+    allow = AllowOption(default='all')
+    defuse = DefuseOption(default='remote')
+    timeout = PositiveIntOption(default=300)
+    block = BlockOption(default=None)
+    uri_mapper = UriMapperOption(default=None)
+    opener = OpenerOption(default=None)
+    selector = SelectorOption(default=ElementSelector)
 
     # Private attributes for arguments
     _source: XMLSourceType
@@ -111,6 +117,7 @@ class XMLResource(XMLResourceLoader):
     _allow: str
     _defuse: str
     _timeout: int
+    _block: Optional[tuple[str, ...]]
     _uri_mapper: Optional[UriMapperType]
     _opener: Optional[OpenerDirector]
     _selector: type[ElementSelector]
@@ -128,27 +135,48 @@ class XMLResource(XMLResourceLoader):
     _context_fp: Optional[IOType] = None
     _context_lock: threading.Lock = threading.Lock()
 
+    @classmethod
+    def from_settings(cls,
+                      settings: SettingsType,
+                      source: XMLSourceType,
+                      **kwargs: Any) -> 'XMLResource':
+        """
+        Returns a new XMLResource instance from settings. Optional keyword arguments must
+        be options for resource initialization and can be passed to override settings.
+
+        :param settings: resource settings.
+        :param source: the XML source.
+        :param kwargs: additional arguments for resource initialization.
+        """
+        return settings.get_resource(cls, source, **kwargs)
+
     def __init__(self, source: XMLSourceType,
-                 base_url: Union[None, str, Path, bytes] = None,
+                 base_url: Optional[BaseUrlType] = None,
                  allow: str = 'all',
                  defuse: str = 'remote',
                  timeout: int = 300,
                  lazy: LazyType = False,
                  thin_lazy: bool = True,
+                 block: Optional[BlockType] = None,
                  uri_mapper: Optional[UriMapperType] = None,
                  opener: Optional[OpenerDirector] = None,
                  iterparse: Optional[IterParseType] = None,
                  selector: Optional[type[ElementSelector]] = None) -> None:
 
         if allow == 'sandbox' and base_url is None:
-            msg = "block access to files out of sandbox requires 'base_url' to be set"
-            raise XMLSchemaValueError(msg)
+            if not is_local_url(source):
+                raise XMLSchemaValueError("block access to files out of sandbox requires"
+                                          " 'base_url' to be set or a local source URL")
+            # Allow sandbox mode without a base_url using the source URL as base
+            assert isinstance(source, str)
+            base_url = os.path.dirname(normalize_url(source))
 
         # set and validate arguments
         self.base_url = base_url
         self.allow = allow
         self.defuse = defuse
         self.timeout = timeout
+        self.block = block
         self.uri_mapper = uri_mapper
         self.opener = opener
         self.selector = selector
@@ -170,14 +198,30 @@ class XMLResource(XMLResourceLoader):
             # source is a file-like object (remote resource or local file)
             self.fp = cast(IOType, source)
             self.access_control(getattr(source, 'url', None))
+        elif self._block is not None and 'tree' in self._block:
+            raise XMLResourceBlocked(f"block initialization from {type(source)!r}")
         else:
-            super().__init__(
-                cast(EtreeType, source), lazy, thin_lazy, iterparse
-            )
+            super().__init__(cast(EtreeType, source), lazy, thin_lazy, iterparse)
             return
+
+        if self._block is not None:
+            # Block control
+            if 'file' in self._block and self.fp is not None:
+                raise XMLResourceBlocked("block initialization from file")
+            elif 'url' in self._block and self.url is not None:
+                raise XMLResourceBlocked("block initialization from URL")
+            elif 'text' in self._block and isinstance(source, (str, bytes)):
+                raise XMLResourceBlocked(f"block initialization from {type(source)!r}")
+            elif 'io' in self._block and isinstance(source, (StringIO, BytesIO)):
+                raise XMLResourceBlocked(f"block initialization from {type(source)!r}")
 
         with XMLResourceManager(self) as cm:
             super().__init__(cm.fp, lazy, thin_lazy, iterparse)
+
+    def __repr__(self) -> str:
+        if self.url:
+            return '%s(url=%r)' % (self.__class__.__name__, self.url)
+        return super().__repr__()
 
     @property
     def name(self) -> Optional[str]:
@@ -430,7 +474,7 @@ class XMLResource(XMLResourceLoader):
                     (self._opener is None or self.url is None):
                 # For seekable file-like objects or ones that can be wrapped in
                 # a buffered reader defuse with rewind option if no custom opener
-                # is provided and the instance has an url, otherwise fallback to
+                # is provided and the instance has a url, otherwise fallback to
                 # double opening with no rewind after the defusing.
                 try:
                     return defuse_xml(fp)
@@ -541,7 +585,7 @@ class XMLResource(XMLResourceLoader):
         equals tag are returned from the iterator.
         """
         for elem in self.iter(tag):
-            yield from etree_iter_location_hints(elem)
+            yield from iter_schema_location_hints(elem)
 
     def iter_depth(self, mode: int = 1, ancestors: Optional[list[ElementType]] = None) \
             -> Iterator[ElementType]:
@@ -697,7 +741,8 @@ class XMLResource(XMLResourceLoader):
             return default
 
     def get_namespaces(self, namespaces: Optional[NsmapType] = None,
-                       root_only: bool = True) -> NsmapType:
+                       root_only: bool = True,
+                       root_default: bool = False) -> dict[str, str]:
         """
         Extracts namespaces with related prefixes from the XML resource.
         If a duplicate prefix is encountered in a xmlns declaration, and
@@ -712,16 +757,25 @@ class XMLResource(XMLResourceLoader):
         element, otherwise scan the whole tree for further namespace declarations. \
         A full namespace map can be useful for cases where the element context is \
         not available.
-
+        :param root_default: if `True` insert default namespace declaration to no \
+        namespace if it's not declared in the root element. Used for getting the \
+        right default namespace declaration for schemas.
         :return: a dictionary for mapping namespace prefixes to full URI.
         """
         namespaces = get_namespace_map(namespaces)
         try:
-            for elem in self.iter():
-                if elem in self._xmlns:
-                    update_namespaces(namespaces, self._xmlns[elem], elem is self.root)
-                if root_only:
-                    break
+            descendants = self.iter()
+            root = next(descendants)
+            if root in self._xmlns:
+                update_namespaces(namespaces, self._xmlns[root], True)
+            if root_default and '' not in namespaces:
+                namespaces[''] = ''
+
+            if not root_only:
+                for elem in descendants:
+                    if elem in self._xmlns:
+                        update_namespaces(namespaces, self._xmlns[elem], False)
+
         except (ElementTree.ParseError, UnicodeEncodeError):
             return namespaces  # a lazy resource with malformed XML data
         else:
@@ -750,7 +804,7 @@ class XMLResource(XMLResourceLoader):
         if root_only:
             location_hints.extend([
                 (ns, normalize_url(url, self.base_url))
-                for ns, url in etree_iter_location_hints(self.root)
+                for ns, url in iter_schema_location_hints(self.root)
             ])
         else:
             try:

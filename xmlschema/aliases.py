@@ -21,36 +21,30 @@ from typing import Any, AnyStr, IO, Optional, TYPE_CHECKING, TypeVar, Union
 from xml.etree.ElementTree import Element, ElementTree
 
 from elementpath.datatypes import NormalizedString, QName, Float10, Integer, \
-    AnyURI, Duration, AbstractDateTime, AbstractBinary
+    AnyURI, Duration, AbstractDateTime, AbstractBinary, AnyAtomicType
 from elementpath.protocols import ElementProtocol, DocumentProtocol
 from elementpath import ElementNode, LazyElementNode, DocumentNode
 
-from .utils.protocols import IOProtocol
-
-__all__ = ['ElementType', 'ElementTreeType', 'XMLSourceType', 'NsmapType', 'LocationsMapType',
-           'NormalizedLocationsType', 'LocationsType', 'NsmapType', 'XmlnsType',
-           'ParentMapType', 'SchemaType', 'BaseXsdType', 'SchemaElementType',
-           'SchemaAttributeType', 'SchemaGlobalType', 'ModelGroupType',
-           'ModelParticleType', 'XPathElementType', 'AtomicValueType',
-           'NumericValueType', 'SchemaSourceType', 'ComponentClassType',
-           'LoadedItemType', 'StagedItemType', 'ExtraValidatorType',
-           'ValidationHookType', 'DecodeType', 'IterDecodeType', 'AncestorsType',
-           'JsonDecodeType', 'EncodeType', 'IterEncodeType', 'DecodedValueType',
-           'FillerType', 'DepthFillerType', 'ValueHookType', 'ElementHookType',
-           'SerializerType', 'OccursCounterType', 'LazyType', 'SourceType',
-           'UriMapperType', 'IterParseType', 'EtreeType', 'IOType', 'ClassInfoType',
-           'ResourceNodeType', 'NsmapsMapType', 'XmlnsMapType', 'ErrorsType']
+from xmlschema.utils.protocols import IOProtocol
 
 if TYPE_CHECKING:
-    from xmlschema.resources import XMLResource  # noqa
-    from xmlschema.namespaces import NamespaceResourcesMap  # noqa
-    from xmlschema.converters import ElementData  # noqa
+    from xmlschema.resources import XMLResource  # noqa: F401
+    from xmlschema.locations import NamespaceResourcesMap  # noqa: F401
+    from xmlschema.converters import ElementData  # noqa: F401
+    from xmlschema.xpath import ElementSelector  # noqa: F401
+    from xmlschema.settings import ResourceSettings, SchemaSettings  # noqa: F401
 
     # noinspection PyUnresolvedReferences
     from xmlschema.validators import XMLSchemaValidationError, XsdComponent, \
         XsdComplexType, XsdSimpleType, XsdElement, XsdAnyElement, XsdAttribute, \
         XsdAnyAttribute, XsdAssert, XsdGroup, XsdAttributeGroup, XsdNotation, \
-        ParticleMixin, XMLSchemaBase  # noqa
+        ParticleMixin, XMLSchemaBase, XsdGlobals, ValidationContext, \
+        DecodeContext  # noqa: F401
+
+##
+# Generic and bounded type vars
+
+T = TypeVar('T')
 
 ##
 # Type aliases for ElementTree
@@ -68,26 +62,32 @@ XmlnsType = Optional[list[tuple[str, str]]]
 
 ##
 # Type aliases for XML resources
+SettingsType = Union['ResourceSettings']
 IOType = Union[IOProtocol[str], IOProtocol[bytes]]
 EtreeType = Union[Element, ElementTree, ElementProtocol, DocumentProtocol]
-SourceType = Union[str, bytes, Path, IO[str], IO[bytes]]
-XMLSourceType = Union[SourceType, EtreeType]
+XMLSourceType = Union[EtreeType, str, bytes, Path, IO[str], IO[bytes]]
+SourceArgType = Union[XMLSourceType, 'XMLResource']
+SourceDataArgType = Union[SourceArgType, dict[str, str], None, AnyAtomicType, bytes]
 
 ResourceNodeType = Union[ElementNode, LazyElementNode, DocumentNode]
+BaseUrlType = Union[str, bytes, Path]
 LazyType = Union[bool, int]
+BlockType = Union[str, tuple[str, ...], list[str]]
 UriMapperType = Union[MutableMapping[str, str], Callable[[str], str]]
 IterParseType = Callable[[IOType, Optional[Sequence[str]]], Iterator[tuple[str, Any]]]
+SelectorType = Optional[type['ElementSelector']]
 ParentMapType = dict[ElementType, Optional[ElementType]]
 NsmapsMapType = dict[ElementType, dict[str, str]]
 XmlnsMapType = dict[ElementType, list[tuple[str, str]]]
 AncestorsType = Optional[list[ElementType]]
 
+LogLevelType = Union[int, str, None]
+
+
 ##
 # Type aliases for XSD components
-SchemaSourceType = Union[
-    str, bytes, Path, IO[str], IO[bytes], Element, ElementTree, 'XMLResource'
-]
 SchemaType = Union['XMLSchemaBase']
+GlobalMapsType = Union['XsdGlobals']
 BaseXsdType = Union['XsdSimpleType', 'XsdComplexType']
 SchemaElementType = Union['XsdElement', 'XsdAnyElement']
 SchemaAttributeType = Union['XsdAttribute', 'XsdAnyAttribute']
@@ -117,6 +117,7 @@ NumericValueType = Union[str, bytes, int, float, Decimal]
 
 ##
 # Type aliases for validation/decoding/encoding
+DecodeContextType = Union['ValidationContext', 'DecodeContext']
 ErrorsType = list['XMLSchemaValidationError']
 ExtraValidatorType = Callable[[ElementType, 'XsdElement'],
                               Optional[Iterator['XMLSchemaValidationError']]]
@@ -127,7 +128,7 @@ DecodeType = Union[Optional[D], tuple[Optional[D], ErrorsType]]
 IterDecodeType = Iterator[Union[D, 'XMLSchemaValidationError']]
 
 E = TypeVar('E')
-EncodeType = Union[E, tuple[E, ErrorsType]]
+EncodeType = Union[Optional[E], tuple[Optional[E], ErrorsType]]
 IterEncodeType = Iterator[Union[E, 'XMLSchemaValidationError']]
 
 JsonDecodeType = Union[str, None, tuple['XMLSchemaValidationError', ...],

@@ -20,18 +20,15 @@ from xmlschema.translation import gettext as _
 from xmlschema.xpath import ElementPathMixin, XMLSchemaProxy
 
 from .exceptions import XMLSchemaNotBuiltError, XMLSchemaAssertPathWarning
-from .validation import DecodeContext
+from .helpers import parse_xpath_default_namespace
+from .validation import ValidationContext
 from .xsdbase import XsdComponent
 from .groups import XsdGroup
 
-
 if TYPE_CHECKING:
-    from elementpath import XPath2Parser
-    from elementpath.xpath3 import XPath3Parser
-    from .attributes import XsdAttributeGroup
-    from .complex_types import XsdComplexType
-    from .elements import XsdElement
-    from .wildcards import XsdAnyElement
+    from elementpath import XPath2Parser  # noqa
+    from elementpath.xpath3 import XPath3Parser  # noqa
+    from . import XsdAttributeGroup, XsdComplexType, XsdElement, XsdAnyElement  # noqa
 
 warnings.filterwarnings(action="always", category=XMLSchemaAssertPathWarning)
 
@@ -80,7 +77,7 @@ class XsdAssert(XsdComponent, ElementPathMixin[Union['XsdAssert', SchemaElementT
             self.parse_error(_("missing required attribute 'test'"))
 
         if 'xpathDefaultNamespace' in self.elem.attrib:
-            self.xpath_default_namespace = self._parse_xpath_default_namespace(self.elem)
+            self.xpath_default_namespace = parse_xpath_default_namespace(self)
         else:
             self.xpath_default_namespace = self.schema.xpath_default_namespace
 
@@ -91,7 +88,7 @@ class XsdAssert(XsdComponent, ElementPathMixin[Union['XsdAssert', SchemaElementT
             return
         self._built = True
 
-        self.parser = self.maps.loader.xpath_parser_class(
+        self.parser = self.maps.xpath_parser_class(
             namespaces=self.schema.namespaces,
             variable_types={'value': self.base_type.sequence_type},
             strict=False,
@@ -119,7 +116,7 @@ class XsdAssert(XsdComponent, ElementPathMixin[Union['XsdAssert', SchemaElementT
     def __call__(self,
                  obj: ElementType,
                  validation: str,
-                 context: DecodeContext,
+                 context: ValidationContext,
                  value: Any = None) -> None:
 
         if not hasattr(self, 'parser') or not hasattr(self, 'token'):
@@ -172,7 +169,7 @@ class XsdAssert(XsdComponent, ElementPathMixin[Union['XsdAssert', SchemaElementT
             return node
 
         return build_schema_node_tree(
-            root=self,
+            root=self,  # type: ignore[arg-type, unused-ignore] # FIXME: update protocols
             uri=schema_node.uri,
             elements=schema_node.elements,
             global_elements=schema_node.children,

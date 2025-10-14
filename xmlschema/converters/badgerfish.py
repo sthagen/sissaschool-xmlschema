@@ -56,11 +56,11 @@ class BadgerFishConverter(XMLSchemaConverter):
         xsd_type = xsd_type or xsd_element.type
 
         tag = self.map_qname(data.tag)
-        result_dict = self.dict(t for t in self.map_attributes(data.attributes))
+        result_dict = self.dict_class(t for t in self.map_attributes(data.attributes))
 
         xmlns = self.get_effective_xmlns(data.xmlns, level, xsd_element)
         if self._use_namespaces and xmlns:
-            result_dict['@xmlns'] = self.dict((k or '$', v) for k, v in xmlns)
+            result_dict['@xmlns'] = self.dict_class((k or '$', v) for k, v in xmlns)
 
         xsd_group = xsd_type.model_group
         if xsd_group is None or not data.content:
@@ -79,20 +79,22 @@ class BadgerFishConverter(XMLSchemaConverter):
                 if name in result_dict:
                     other = result_dict[name]
                     if not isinstance(other, MutableSequence) or not other:
-                        result_dict[name] = self.list([other, item])
+                        result_dict[name] = self.list_class((other, item))
                     elif isinstance(other[0], MutableSequence) or \
                             not isinstance(item, MutableSequence):
                         other.append(item)
                     else:
-                        result_dict[name] = self.list([other, item])
+                        result_dict[name] = self.list_class((other, item))
                 else:
                     if xsd_type.name == XSD_ANY_TYPE or \
                             has_single_group and xsd_child.is_single():
                         result_dict[name] = item
                     else:
-                        result_dict[name] = self.list([item])
+                        result_dict[name] = self.list_class((item,))
 
-        return self.dict([(tag, result_dict)])
+        if self.dict_class is dict:
+            return {tag: result_dict}
+        return self.dict_class(((tag, result_dict),))
 
     @stackable
     def element_encode(self, obj: Any, xsd_element: 'XsdElement', level: int = 0) -> ElementData:
@@ -114,7 +116,7 @@ class BadgerFishConverter(XMLSchemaConverter):
         content: list[tuple[Union[str, int], Any]] = []
         attributes = {}
 
-        xmlns = self.set_context(obj, level)
+        xmlns = self.set_xmlns_context(obj, level)
 
         for name, value in obj.items():
             if name == '@xmlns':

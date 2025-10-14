@@ -191,14 +191,14 @@ class TestXmlDocuments(XMLSchemaTestCase):
             self.assertIsInstance(source, XMLResource)
             self.assertIsInstance(schema, XMLSchema10)
             self.assertTrue(is_lxml_element(source.root))
-            self.assertTrue(is_lxml_element(schema.root))
+            self.assertFalse(is_lxml_element(schema.root))
 
             source, schema = get_context(self.col_xml_file, self.col_xsd_file,
                                          iterparse=lxml_etree.iterparse)
             self.assertIsInstance(source, XMLResource)
             self.assertIsInstance(schema, XMLSchema10)
             self.assertTrue(is_lxml_element(source.root))
-            self.assertTrue(is_lxml_element(schema.root))
+            self.assertFalse(is_lxml_element(schema.root))
 
             col_schema = XMLSchema10(self.col_xsd_file)
             source, schema = get_context(self.col_xml_file, col_schema,
@@ -214,7 +214,7 @@ class TestXmlDocuments(XMLSchemaTestCase):
             self.assertIsInstance(schema, XMLSchema10)
             self.assertIs(xml_document.schema, schema)
             self.assertTrue(is_lxml_element(source.root))
-            self.assertTrue(is_lxml_element(schema.root))
+            self.assertFalse(is_lxml_element(schema.root))
 
     def test_get_context_without_schema(self):
         xml_data = '<text xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n' \
@@ -232,7 +232,7 @@ class TestXmlDocuments(XMLSchemaTestCase):
         self.assertEqual(str(ctx.exception),
                          "cannot get a schema for XML data, provide a schema argument")
 
-        source, schema = get_context('<empty/>', dummy_schema=True)
+        source, schema = get_context('<empty/>', validation='skip')
         self.assertEqual(source.root.tag, 'empty')
         self.assertIsInstance(schema, XMLSchema10)
 
@@ -333,8 +333,9 @@ class TestXmlDocuments(XMLSchemaTestCase):
 
         with self.assertRaises(ValueError) as ctx:
             XmlDocument(xml_file, validation='foo')
-        self.assertEqual("validation mode can be 'strict', 'lax' or 'skip': 'foo'",
-                         str(ctx.exception))
+        self.assertTrue(str(ctx.exception).startswith(
+            "invalid value 'foo' for optional argument 'validation'"
+        ))
 
     def test_xml_document_init_without_schema(self):
         with self.assertRaises(ValueError) as ctx:

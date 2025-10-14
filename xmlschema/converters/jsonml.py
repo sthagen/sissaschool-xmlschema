@@ -16,7 +16,7 @@ from xmlschema.aliases import NsmapType, BaseXsdType
 from .base import ElementData, stackable, XMLSchemaConverter
 
 if TYPE_CHECKING:
-    from xmlschema.validators import XsdElement
+    from xmlschema.validators import XsdElement  # noqa: F401
 
 
 class JsonMLConverter(XMLSchemaConverter):
@@ -65,12 +65,12 @@ class JsonMLConverter(XMLSchemaConverter):
     def element_decode(self, data: ElementData, xsd_element: 'XsdElement',
                        xsd_type: Optional[BaseXsdType] = None, level: int = 0) -> Any:
         xsd_type = xsd_type or xsd_element.type
-        result_list = self.list()
+        result_list = [] if self.list_class is list else self.list_class()
         xmlns = self.get_effective_xmlns(data.xmlns, level, xsd_element)
 
         result_list.append(self.map_qname(data.tag))
 
-        attributes = self.dict(self.map_attributes(data.attributes))
+        attributes = self.dict_class(self.map_attributes(data.attributes))
         if xmlns and self._use_namespaces:
             attributes.update(
                 (f'{self.ns_prefix}:{k}' if k else self.ns_prefix, v) for k, v in xmlns
@@ -82,10 +82,10 @@ class JsonMLConverter(XMLSchemaConverter):
             result_list.append(data.text)
 
         if xsd_type.model_group is not None:
-            result_list.extend([
-                value if value is not None else self.list([name])
+            result_list.extend(
+                value if value is not None else self.list_class((name,))
                 for name, value, _ in self.map_content(data.content)
-            ])
+            )
 
         return result_list
 
@@ -97,7 +97,7 @@ class JsonMLConverter(XMLSchemaConverter):
         elif not obj:
             raise XMLSchemaValueError("The first argument is an empty sequence")
 
-        xmlns = self.set_context(obj, level)
+        xmlns = self.set_xmlns_context(obj, level)
 
         tag = self.unmap_qname(obj[0])
         if not xsd_element.is_matching(tag):

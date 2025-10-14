@@ -9,6 +9,7 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 import unittest
+import warnings
 from pathlib import Path
 from typing import cast, MutableMapping, Optional, Type
 from xml.etree.ElementTree import Element, parse as etree_parse
@@ -26,8 +27,7 @@ from xmlschema.testing import etree_elements_assert_equal, run_xmlschema_tests
 
 from xmlschema.converters import XMLSchemaConverter, UnorderedConverter, \
     ParkerConverter, BadgerFishConverter, AbderaConverter, JsonMLConverter, \
-    ColumnarConverter, GDataConverter, check_converter_argument
-from xmlschema.namespaces import NamespaceMapper
+    ColumnarConverter, GDataConverter
 from xmlschema.dataobjects import DataElementConverter
 
 
@@ -61,22 +61,21 @@ class TestConverters(unittest.TestCase):
     def casepath(cls, relative_path):
         return str(Path(__file__).parent.joinpath('test_cases', relative_path))
 
-    def test_check_converter_argument(self):
-        self.assertIsNone(check_converter_argument(XMLSchemaConverter()))
-        self.assertRaises(TypeError, check_converter_argument, NamespaceMapper())
-
     def test_element_class_argument(self):
         converter = XMLSchemaConverter()
         self.assertIs(converter.etree_element_class, Element)
 
-        converter = XMLSchemaConverter(etree_element_class=Element)
-        self.assertIs(converter.etree_element_class, Element)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
 
-        if lxml_etree is not None:
-            converter = XMLSchemaConverter(
-                etree_element_class=cast(Type[Element], lxml_etree.Element)
-            )
-            self.assertIs(converter.etree_element_class, lxml_etree.Element)
+            converter = XMLSchemaConverter(etree_element_class=Element)
+            self.assertIs(converter.etree_element_class, Element)
+
+            if lxml_etree is not None:
+                converter = XMLSchemaConverter(
+                    etree_element_class=cast(Type[Element], lxml_etree.Element)
+                )
+                self.assertIs(converter.etree_element_class, lxml_etree.Element)
 
     def test_prefix_arguments(self):
         converter = XMLSchemaConverter(cdata_prefix='#')
@@ -108,33 +107,19 @@ class TestConverters(unittest.TestCase):
 
         with self.assertRaises(TypeError) as ctx:
             XMLSchemaConverter(cdata_prefix=1)
-        self.assertTrue(str(ctx.exception).startswith(
-            "'cdata_prefix' must be a <class 'str'> instance or None")
-        )
+        self.assertTrue(str(ctx.exception).startswith("invalid type <class 'int'>"))
 
         with self.assertRaises(TypeError) as ctx:
             XMLSchemaConverter(preserve_root=1)
-        self.assertTrue(str(ctx.exception).startswith(
-            "'preserve_root' must be a <class 'bool'> instance")
-        )
-
-        with self.assertRaises(TypeError) as ctx:
-            XMLSchemaConverter(indent='no')
-        self.assertTrue(str(ctx.exception).startswith(
-            "'indent' must be a <class 'int'> instance")
-        )
+        self.assertTrue(str(ctx.exception).startswith("invalid type <class 'int'>"))
 
         with self.assertRaises(TypeError) as ctx:
             XMLSchemaConverter(dict_class=list)
-        self.assertTrue(str(ctx.exception).startswith(
-            "'dict_class' must be a MutableMapping object")
-        )
+        self.assertTrue(str(ctx.exception).startswith("invalid <class 'list'>"))
 
         with self.assertRaises(TypeError) as ctx:
             XMLSchemaConverter(list_class=dict)
-        self.assertTrue(str(ctx.exception).startswith(
-            "'list_class' must be a MutableSequence object")
-        )
+        self.assertTrue(str(ctx.exception).startswith("invalid <class 'dict'>"))
 
     def test_lossy_property(self):
         self.assertTrue(XMLSchemaConverter().lossy)
@@ -197,11 +182,15 @@ class TestConverters(unittest.TestCase):
 
     def test_etree_element_method(self):
         converter = XMLSchemaConverter()
-        elem = converter.etree_element('A')
-        self.assertIsNone(etree_elements_assert_equal(elem, Element('A')))
 
-        elem = converter.etree_element('A', attrib={})
-        self.assertIsNone(etree_elements_assert_equal(elem, Element('A')))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            elem = converter.etree_element('A')
+            self.assertIsNone(etree_elements_assert_equal(elem, Element('A')))
+
+            elem = converter.etree_element('A', attrib={})
+            self.assertIsNone(etree_elements_assert_equal(elem, Element('A')))
 
     def test_columnar_converter(self):
         col_schema = XMLSchema(self.col_xsd_filename, converter=ColumnarConverter)

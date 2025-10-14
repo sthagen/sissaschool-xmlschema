@@ -9,15 +9,18 @@
 #
 from decimal import Decimal
 from math import isinf, isnan
-from typing import Optional, SupportsInt, SupportsFloat, Union
+from typing import Optional, SupportsInt, SupportsFloat, TYPE_CHECKING, Union
 from xml.etree.ElementTree import Element
 from elementpath import datatypes
 
-from xmlschema.aliases import ElementType
-from xmlschema.names import XSD_ANNOTATION
+import xmlschema.names as nm
+from xmlschema.aliases import ElementType, SchemaType
 from xmlschema.exceptions import XMLSchemaValueError
 from xmlschema.translation import gettext as _
 from .exceptions import XMLSchemaValidationError
+
+if TYPE_CHECKING:
+    from xmlschema.validators import XsdAnnotation, XsdComponent  # noqa: F401
 
 XSD_FINAL_ATTRIBUTE_VALUES = {'restriction', 'extension', 'list', 'union'}
 XSD_BOOLEAN_MAP = {
@@ -26,43 +29,120 @@ XSD_BOOLEAN_MAP = {
 }
 
 
-def get_xsd_derivation_attribute(elem: Element, attribute: str,
-                                 values: Optional[set[str]] = None) -> str:
+def get_xsd_annotation(elem: ElementType,
+                       schema: SchemaType,
+                       parent: Optional['XsdComponent'] = None) -> Optional['XsdAnnotation']:
+    """
+    Returns the XSD annotation from the 1st child element of the provided element,
+    `None` if it doesn't exist.
+    """
+    for child in elem:
+        if child.tag == nm.XSD_ANNOTATION:
+            return schema.builders.annotation_class(
+                child, schema, parent, parent_elem=elem
+            )
+        elif not callable(child.tag):
+            return None
+    else:
+        return None
+
+
+def get_schema_annotations(schema: SchemaType) -> list['XsdAnnotation']:
+    annotations = []
+    annotation_class = schema.builders.annotation_class
+
+    for elem in schema.source.root:
+        if elem.tag == nm.XSD_ANNOTATION:
+            annotations.append(annotation_class(elem, schema))
+        elif elem.tag in nm.SCHEMA_DECLARATION_TAGS or elem.tag == nm.XSD_DEFAULT_OPEN_CONTENT:
+            annotation = get_xsd_annotation(elem, schema)
+            if annotation is not None:
+                annotations.append(annotation)
+
+    return annotations
+
+
+def parse_xsd_derivation(elem: Element,
+                         name: str,
+                         choices: Union[None, set[str], tuple[str, ...]] = None,
+                         validator: Union[None, SchemaType, 'XsdComponent'] = None) -> str:
     """
     Get a derivation attribute (maybe 'block', 'blockDefault', 'final' or 'finalDefault')
     checking the items with the values arguments. Returns a string.
 
     :param elem: the Element instance.
-    :param attribute: the attribute name.
-    :param values: a set of admitted values when the attribute value is not '#all'.
+    :param name: the attribute name.
+    :param choices: a set of admitted values when the attribute value is not '#all'.
+    :param validator: optional schema or a component (element or type) to report \
+    a parse error instead of raising a `ValueError`.
     """
-    value = elem.get(attribute)
-    if value is None:
+    try:
+        value = elem.attrib[name]
+    except KeyError:
         return ''
 
-    if values is None:
-        values = XSD_FINAL_ATTRIBUTE_VALUES
+    if choices is None:
+        choices = XSD_FINAL_ATTRIBUTE_VALUES
 
     items = value.split()
     if len(items) == 1 and items[0] == '#all':
-        return ' '.join(values)
-    elif not all(s in values for s in items):
-        raise ValueError(_("wrong value %r for attribute %r") % (value, attribute))
+        return ' '.join(choices)
+    elif not all(s in choices for s in items):
+        msg = _("wrong value {!r} for attribute {!r}").format(value, name)
+        if validator is None:
+            raise ValueError(msg)
+        validator.parse_error(msg)
+        return ''
     return value
 
 
-def get_xsd_annotation_child(elem: ElementType) -> Optional[ElementType]:
+def parse_xpath_default_namespace(validator: Union[SchemaType, 'XsdComponent']) -> str:
     """
-    Returns the child element of the annotation associated to an XSD component,
-    `None` if it doesn't exist.
+    Parse XSD 1.1 xpathDefaultNamespace attribute for schema, alternative, assert, assertion
+    and selector declarations, checking if the value is conforming to the specification. In
+    case the attribute is missing or for wrong attribute values defaults to ''.
     """
-    for child in elem:
-        if child.tag == XSD_ANNOTATION:
-            return child
-        elif not callable(child.tag):
-            return None
+    try:
+        value = validator.elem.attrib['xpathDefaultNamespace']
+    except KeyError:
+        return ''
+
+    value = value.strip()
+    if value == '##local':
+        return ''
+    elif value == '##defaultNamespace':
+        return validator.default_namespace
+    elif value == '##targetNamespace':
+        return validator.target_namespace
+    elif len(value.split()) == 1:
+        return value
     else:
-        return None
+        admitted_values = ('##defaultNamespace', '##targetNamespace', '##local')
+        msg = _("wrong value {0!r} for 'xpathDefaultNamespace' "
+                "attribute, can be (anyURI | {1}).")
+        validator.parse_error(msg.format(value, ' | '.join(admitted_values)))
+        return ''
+
+
+def parse_target_namespace(validator: Union[SchemaType, 'XsdComponent']) -> str:
+    """
+    XSD 1.1 targetNamespace attribute in schema, elements and attributes declarations.
+    """
+    try:
+        target_namespace = validator.elem.attrib['targetNamespace'].strip()
+    except KeyError:
+        return ''
+
+    if target_namespace == nm.XMLNS_NAMESPACE:
+        # https://www.w3.org/TR/xmlschema11-1/#sec-nss-special
+        msg = _(f"The namespace {nm.XMLNS_NAMESPACE} cannot be used as 'targetNamespace'")
+        raise XMLSchemaValueError(msg)
+    elif not target_namespace and validator.elem.tag == nm.XSD_SCHEMA:
+        # https://www.w3.org/TR/2004/REC-xmlschema-1-20041028/structures.html#element-schema
+        msg = _("the attribute 'targetNamespace' cannot be an empty string")
+        validator.parse_error(msg)
+
+    return target_namespace
 
 
 #

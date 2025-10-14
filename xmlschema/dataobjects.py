@@ -8,7 +8,6 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 from abc import ABCMeta
-from copy import copy
 from itertools import count
 from collections.abc import Iterator, MutableMapping, MutableSequence
 from typing import TYPE_CHECKING, cast, overload, Any, Optional, Union, Type
@@ -18,7 +17,8 @@ from elementpath.etree import etree_tostring
 
 from xmlschema.exceptions import XMLSchemaAttributeError, XMLSchemaTypeError, \
     XMLSchemaValueError
-from xmlschema.aliases import ElementType, XMLSourceType, NsmapType, BaseXsdType, DecodeType
+from xmlschema.aliases import ElementType, XMLSourceType, NsmapType, BaseXsdType, \
+    DecodeType, EncodeType
 from xmlschema.converters import ElementData, XMLSchemaConverter
 from xmlschema.resources import XMLResource
 from xmlschema.utils.qnames import get_namespace, get_prefixed_qname, \
@@ -228,7 +228,7 @@ class DataElement(MutableSequence['DataElement']):
                 yield child
 
     def get_namespaces(self, namespaces: Optional[NsmapType] = None,
-                       root_only: bool = True) -> NsmapType:
+                       root_only: bool = True) -> dict[str, str]:
         """
         Returns an overall namespace map for DetaElement, resolving prefix redefinitions.
 
@@ -236,7 +236,11 @@ class DataElement(MutableSequence['DataElement']):
         :param root_only: if `True` processes only the namespaces declared in the data \
         element, otherwise precesses also other namespaces declared in its descendants.
         """
-        namespaces = copy(namespaces) if namespaces is not None else {}
+        if namespaces is None:
+            namespaces = {}
+        else:
+            namespaces = {k: v for k, v in namespaces.items()}
+
         if root_only:
             update_namespaces(namespaces, self.nsmap.items(), root_declarations=True)
         else:
@@ -301,8 +305,7 @@ class DataElement(MutableSequence['DataElement']):
             else:
                 del result
 
-    def encode(self, validation: str = 'strict', **kwargs: Any) \
-            -> Union[ElementType, tuple[ElementType, list['XMLSchemaValidationError']]]:
+    def encode(self, validation: str = 'strict', **kwargs: Any) -> EncodeType[ElementType]:
         """
         Encodes the data object to XML.
 
@@ -352,7 +355,9 @@ class DataElement(MutableSequence['DataElement']):
         :param method: is either "xml" (the default), "html" or "text".
         :return: a Unicode string.
         """
-        root, _ = self.encode(validation='lax')
+        root, _ = self.encode(validation='lax')  # type: ignore[misc]
+        if root is None:
+            return ''
         if not hasattr(root, 'nsmap'):
             namespaces = self.get_namespaces(namespaces, root_only=False)
 
@@ -487,17 +492,21 @@ class DataElementConverter(XMLSchemaConverter):
         return obj.xmlns if isinstance(obj, DataElement) else None
 
     def get_namespaces(self, namespaces: Optional[NsmapType] = None,
-                       root_only: bool = True) -> NsmapType:
-        if not isinstance(self.source, DataElement) or self._xmlns_getter is None:
+                       root_only: bool = True) -> dict[str, str]:
+        if self._xmlns_getter is None:
+            return get_namespace_map(namespaces)
+        elif not isinstance(self.source, DataElement):
             return super().get_namespaces(namespaces, root_only)
 
         namespaces = get_namespace_map(namespaces)
-        for obj in self.source.iter():
-            xmlns = self.get_xmlns_from_data(obj)
-            if xmlns:
-                update_namespaces(namespaces, xmlns, obj is self.source)
-            if root_only:
-                break
+        iter_elements = self.source.iter()
+        if xmlns := next(iter_elements).xmlns:
+            update_namespaces(namespaces, xmlns, True)
+
+        if not root_only:
+            for element in iter_elements:
+                if element.xmlns:
+                    update_namespaces(namespaces, element.xmlns)
 
         return namespaces
 
@@ -509,11 +518,6 @@ class DataElementConverter(XMLSchemaConverter):
     def losslessly(self) -> bool:
         return True
 
-    def copy(self, keep_namespaces: bool = True, **kwargs: Any) -> 'DataElementConverter':
-        obj = cast(DataElementConverter, super().copy(keep_namespaces, **kwargs))
-        obj.data_element_class = kwargs.get('data_element_class', self.data_element_class)
-        return obj
-
     def get_data_element(self, data: ElementData,
                          xsd_element: 'XsdElement',
                          xsd_type: Optional[BaseXsdType] = None,
@@ -522,7 +526,7 @@ class DataElementConverter(XMLSchemaConverter):
         return self.data_element_class(
             tag=data.tag,
             value=data.text,
-            nsmap=self._namespaces if self._use_namespaces else None,
+            nsmap=self.namespaces if self._use_namespaces else None,
             xmlns=xmlns,
             xsd_element=xsd_element,
             xsd_type=xsd_type
@@ -550,7 +554,7 @@ class DataElementConverter(XMLSchemaConverter):
 
     def element_encode(self, data_element: 'DataElement', xsd_element: 'XsdElement',
                        level: int = 0) -> ElementData:
-        xmlns = self.set_context(data_element, level)
+        xmlns = self.set_xmlns_context(data_element, level)
         if not xsd_element.is_matching(data_element.tag):
             raise XMLSchemaValueError("Unmatched tag")
 
@@ -592,7 +596,7 @@ class DataBindingConverter(DataElementConverter):
         return cls(
             tag=data.tag,
             value=data.text,
-            nsmap=self._namespaces if self._use_namespaces else None,
+            nsmap=self.namespaces if self._use_namespaces else None,
             xmlns=xmlns,
             xsd_type=xsd_type
         )

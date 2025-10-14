@@ -12,6 +12,7 @@ from itertools import zip_longest
 from collections.abc import Iterator
 from threading import Lock, RLock
 from typing import cast, Any, Optional, Union
+from xml.etree import ElementTree
 
 from elementpath import ElementNode, LazyElementNode, DocumentNode, \
     build_lxml_node_tree, build_node_tree
@@ -19,11 +20,11 @@ from elementpath.protocols import LxmlElementProtocol
 
 from xmlschema.aliases import ElementType, ElementTreeType, \
     EtreeType, IOType, IterParseType, ParentMapType
-from xmlschema.exceptions import XMLResourceError, XMLResourceParseError
+from xmlschema.exceptions import XMLResourceError, XMLResourceParseError, XMLResourceExceeded
 from xmlschema.utils.misc import iter_class_slots
 from xmlschema.utils.qnames import get_namespace
-
-from .arguments import LazyArgument, ThinLazyArgument, IterParseArgument
+from xmlschema.arguments import BooleanOption, LazyOption, IterParseOption
+from xmlschema import _limits
 
 LazyLockType = RLock if platform.python_implementation() == 'PyPy' else Lock
 
@@ -33,9 +34,9 @@ class XMLResourceLoader:
     A proxy for XML data loading that can handle full or lazy loads of XML trees.
     """
     # Descriptor-based attributes for arguments
-    lazy = LazyArgument()
-    thin_lazy = ThinLazyArgument()
-    iterparse = IterParseArgument()
+    lazy = LazyOption(default=False)
+    thin_lazy = BooleanOption(default=True)
+    iterparse = IterParseOption(default=ElementTree.iterparse)
 
     # Private attributes for arguments
     _lazy: Union[bool, int]
@@ -51,8 +52,8 @@ class XMLResourceLoader:
     root: ElementType
     """The XML tree root Element."""
 
-    __slots__ = ('root', '_nsmaps', '_xmlns', '_lazy', '_thin_lazy', '_iterparse',
-                 '_xpath_root', '_parent_map', '__dict__')
+    __slots__ = ('root', '_nsmaps', '_xmlns', '_lazy', '_thin_lazy',
+                 '_iterparse', '_xpath_root', '_parent_map', '__dict__')
 
     def __init__(self, source: Union[IOType, EtreeType],
                  lazy: Union[bool, int] = False,
@@ -79,7 +80,7 @@ class XMLResourceLoader:
             if hasattr(source, 'tag'):
                 self.root = cast(ElementType, source)
             else:
-                self.root = cast(ElementTreeType, source).getroot()
+                self.root = cast(ElementType, cast(ElementTreeType, source).getroot())
 
             if self._lazy:
                 msg = f"a {self.__class__.__name__} created from an ElementTree can't be lazy"
@@ -224,6 +225,7 @@ class XMLResourceLoader:
         start_ns: list[tuple[str, str]] = []
         end_ns = False
         nsmap_stack: list[dict[str, str]] = [{}]
+        remaining_levels = _limits.MAX_XML_DEPTH
 
         self._nsmaps.clear()
         self._xmlns.clear()
@@ -235,6 +237,11 @@ class XMLResourceLoader:
         try:
             for event, node in self._iterparse(fp, events):
                 if event == 'start':
+                    remaining_levels -= 1
+                    if not remaining_levels:
+                        msg = "maximum XML depth reached (MAX_XML_DEPTH={}) for {}"
+                        raise XMLResourceExceeded(msg.format(_limits.MAX_XML_DEPTH, self))
+
                     if end_ns:
                         nsmap_stack.pop()
                         end_ns = False
@@ -256,6 +263,7 @@ class XMLResourceLoader:
                     yield event, node
 
                 elif event == 'end':
+                    remaining_levels += 1
                     if end_ns:
                         nsmap_stack.pop()
                         end_ns = False
@@ -264,8 +272,11 @@ class XMLResourceLoader:
 
                 elif event == 'start-ns':
                     start_ns.append(node)
-                else:
+                elif event == 'end-ns':
                     end_ns = True
+                else:
+                    yield event, node  # comment or pi node
+
         except SyntaxError as err:
             raise XMLResourceParseError("invalid XML syntax: {}".format(err)) from err
         finally:
@@ -277,12 +288,25 @@ class XMLResourceLoader:
         end_ns = False
         nsmaps = self._nsmaps
         xmlns = self._xmlns
-        events = 'start-ns', 'end-ns', 'start'
+        events = 'start-ns', 'end-ns', 'start', 'comment', 'pi', 'end'
         nsmap_stack: list[dict[str, str]] = [{}]
+        remaining_levels = _limits.MAX_XML_DEPTH
+        remaining_elements = _limits.MAX_XML_ELEMENTS
 
         try:
             for event, node in self._iterparse(fp, events):
                 if event == 'start':
+                    remaining_levels -= 1
+                    remaining_elements -= 1
+                    if not remaining_levels:
+                        msg = "maximum XML depth reached (MAX_XML_DEPTH={}) for {!r}"
+                        raise XMLResourceExceeded(msg.format(_limits.MAX_XML_DEPTH, self))
+                    if not remaining_elements:
+                        msg = ("maximum XML elements reached (MAX_XML_ELEMENTS={} for {!r}). "
+                               "Try to increase the limit or process the data using a lazy "
+                               "XMLResource, that has no limit.")
+                        raise XMLResourceExceeded(msg.format(_limits.MAX_XML_ELEMENTS, self))
+
                     if not root_started:
                         self.root = node
                         root_started = True
@@ -297,8 +321,10 @@ class XMLResourceLoader:
                     nsmaps[node] = nsmap_stack[-1]
                 elif event == 'start-ns':
                     start_ns.append(node)
-                else:
+                elif event == 'end-ns':
                     end_ns = True
+                elif event == 'end':
+                    remaining_levels += 1
         except SyntaxError as err:
             raise XMLResourceParseError("invalid XML syntax: {}".format(err)) from err
 
