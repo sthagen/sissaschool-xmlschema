@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -59,9 +59,6 @@ class XsdAttribute(XsdComponent, ValidationMixin[Optional[str], DecodedValueType
     qualified_name: str
     prefixed_name: str
 
-    type: XsdSimpleType
-    """The XSD simpleType of the attribute."""
-
     form: Optional[str] = None
     qualified: bool = False
     """
@@ -87,6 +84,9 @@ class XsdAttribute(XsdComponent, ValidationMixin[Optional[str], DecodedValueType
     __slots__ = ('type',)
 
     def _parse(self) -> None:
+        self.type: XsdSimpleType
+        """The XSD simpleType of the attribute."""
+
         attrib = self.elem.attrib
 
         if 'use' in attrib and self.parent is not None and \

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -28,6 +28,10 @@ from xmlschema.validators.elements import XsdElement
 from xmlschema.testing import XsdValidatorTestCase
 
 
+class DummyGlobals:
+    built = False
+
+
 class ModelGroup(XsdGroup):
     """A subclass for testing XSD models, that disables element parsing and schema bindings."""
 
@@ -36,6 +40,9 @@ class ModelGroup(XsdGroup):
         if model not in {'sequence', 'choice', 'all'}:
             raise XMLSchemaValueError(f"invalid model {model!r} for a group")
         self._group: List[Union[ParticleMixin, 'ModelGroup']] = []
+        self._built = None
+        self.maps = DummyGlobals()
+        self.maps.built = True
         self.content = self._group
         self.max_model_depth = 15
         self.model: str = model

@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2024-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -8,7 +8,7 @@
 # @author Davide Brunato <brunato@sissa.it>
 #
 from types import TracebackType
-from typing import AnyStr, IO, Optional, Protocol, Type
+from typing import AnyStr, IO, Protocol
 
 
 class IOProtocol(Protocol[AnyStr]):
@@ -25,8 +25,8 @@ class IOProtocol(Protocol[AnyStr]):
     def seekable(self) -> bool: ...
     def tell(self) -> int: ...
     def __enter__(self) -> 'IOProtocol[AnyStr]': ...
-    def __exit__(self, exc_type: Optional[Type[BaseException]],
-                 exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None: ...
+    def __exit__(self, exc_type: type[BaseException] | None,
+                 exc_val: BaseException | None, exc_tb: TracebackType | None) -> None: ...
 
 
 class FileWrapperProtocol(IOProtocol[AnyStr], Protocol[AnyStr]):

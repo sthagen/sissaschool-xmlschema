@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -10,6 +10,7 @@
 """
 This module contains classes for XML Schema model groups.
 """
+import threading
 import warnings
 from collections.abc import Iterable, Iterator, MutableMapping, MutableSequence
 from copy import copy as _copy
@@ -28,7 +29,8 @@ from xmlschema.utils.qnames import get_qname, local_name
 from xmlschema import _limits
 
 from .exceptions import XMLSchemaModelError, XMLSchemaModelDepthError, \
-    XMLSchemaValidationError, XMLSchemaTypeTableWarning, XMLSchemaCircularityError
+    XMLSchemaValidationError, XMLSchemaTypeTableWarning, XMLSchemaCircularityError, \
+    XMLSchemaValidatorError
 from .validation import ValidationContext, DecodeContext, EncodeContext, ValidationMixin
 from .xsdbase import XsdComponent, XsdType
 from .particles import ParticleMixin
@@ -105,10 +107,11 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
 
     # For XSD 1.1 openContent processing
     open_content: Optional[XsdOpenContent] = None
-
+    _model_particles: tuple[ModelParticleType, ...] | None = None
+    _elements: tuple[XsdElement | XsdAnyElement, ...] | None = None
     _ADMITTED_TAGS = (nm.XSD_GROUP, nm.XSD_SEQUENCE, nm.XSD_ALL, nm.XSD_CHOICE)
 
-    __slots__ = ('_group', 'content', 'oid', 'model', 'min_occurs', 'max_occurs')
+    __slots__ = ('_group', 'content', 'oid', 'model', 'min_occurs', 'max_occurs', '_iter_lock')
 
     def __init__(self, elem: ElementType,
                  schema: SchemaType,
@@ -118,6 +121,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         self.content = self._group
         self.oid = (self,)
         self.min_occurs = self.max_occurs = 1
+        self._iter_lock = threading.Lock()
         super().__init__(elem, schema, parent)
 
     def __repr__(self) -> str:
@@ -146,15 +150,34 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         return self._group[i]
 
     def __setitem__(self, i: Union[int, slice], o: Any) -> None:
+        if self._built:
+            raise XMLSchemaValidatorError(self, 'cannot modify an already built group')
         self._group[i] = o
 
     def __delitem__(self, i: Union[int, slice]) -> None:
+        if self._built:
+            raise XMLSchemaValidatorError(self, 'cannot modify an already built group')
         del self._group[i]
 
     def __len__(self) -> int:
         return len(self._group)
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = {attr: getattr(self, attr) for attr in self._mro_slots()}
+        state.update(self.__dict__)
+        state.pop('_model_particles', None)
+        state.pop('_elements', None)
+        state.pop('_iter_lock', None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for attr, value in state.items():
+            object.__setattr__(self, attr, value)
+        self._iter_lock = threading.Lock()
+
     def insert(self, i: int, item: ModelParticleType) -> None:
+        if self._built:
+            raise XMLSchemaValidatorError(self, 'cannot modify an already built group')
         self._group.insert(i, item)
 
     def is_emptiable(self) -> bool:
@@ -321,6 +344,15 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         Raises `XMLSchemaModelDepthError` if the *depth* of the model is over
         `limits.MAX_MODEL_DEPTH` value.
         """
+        if self._model_particles is not None:
+            yield from self._model_particles
+            return
+        elif self._built and not self._iter_lock.locked():
+            with self._iter_lock:
+                self._model_particles = tuple(self.iter_model())
+                yield from self._model_particles
+                return
+
         iterators: list[Iterator[ModelParticleType]] = []
         particles = iter(self)
 
@@ -345,7 +377,15 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         A generator function iterating model's elements. Raises `XMLSchemaModelDepthError`
         if the overall depth of the model groups is over `limits.MAX_MODEL_DEPTH`.
         """
-        if self.max_occurs == 0:
+        if self._elements is not None:
+            yield from self._elements
+            return
+        elif self._built and not self._iter_lock.locked():
+            with self._iter_lock:
+                self._elements = tuple(self.iter_elements())
+                yield from self._elements
+                return
+        elif self.max_occurs == 0:
             return
 
         iterators: list[Iterator[ModelParticleType]] = []
@@ -477,11 +517,14 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
     def _any_content_group_fallback(self) -> None:
         self.model = 'sequence'
         self.mixed = True
+        xsd_element = self.builders.any_element_class(ANY_ELEMENT, self.schema, self)
         self._group.clear()
-        self._group.append(self.builders.any_element_class(ANY_ELEMENT, self.schema, self))
+        self._group.append(xsd_element)
+        self.__dict__.pop('elements', None)
 
     def _parse(self) -> None:
         self._group.clear()
+        self.__dict__.pop('elements', None)
         self._parse_particle(self.elem)
 
         if self.parent is not None and self.parent.mixed:
@@ -569,57 +612,60 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
 
         child: ElementType
         for child in content_model:
-            if child.tag == nm.XSD_ANNOTATION or callable(child.tag):
-                continue
-            elif child.tag == nm.XSD_ELEMENT:
-                self.append(self.builders.element_class(child, self.schema, self))
-            elif content_model.tag == nm.XSD_ALL:
-                self.parse_error(_("'all' model can contain only elements"))
-            elif child.tag == nm.XSD_ANY:
-                self._group.append(self.builders.any_element_class(child, self.schema, self))
-            elif child.tag in (nm.XSD_SEQUENCE, nm.XSD_CHOICE):
-                self._group.append(XsdGroup(child, self.schema, self))
-            elif child.tag == nm.XSD_GROUP:
-                try:
-                    ref = self.schema.resolve_qname(child.attrib['ref'])
-                except (KeyError, ValueError, RuntimeError) as err:
-                    if 'ref' not in child.attrib:
-                        msg = _("missing attribute 'ref' in local group")
-                        self.parse_error(msg, child)
-                    else:
-                        self.parse_error(err, child)
+            match child.tag:
+                case x if callable(x):
                     continue
+                case nm.XSD_ANNOTATION:
+                    continue
+                case nm.XSD_ELEMENT:
+                    self._group.append(self.builders.element_class(child, self.schema, self))
+                case nm.XSD_ALL:
+                    self.parse_error(_("'all' model can contain only elements"))
+                case nm.XSD_ANY:
+                    self._group.append(
+                        self.builders.any_element_class(child, self.schema, self)
+                    )
+                case nm.XSD_SEQUENCE | nm.XSD_CHOICE:
+                    self._group.append(XsdGroup(child, self.schema, self))
+                case nm.XSD_GROUP:
+                    try:
+                        ref = self.schema.resolve_qname(child.attrib['ref'])
+                    except (KeyError, ValueError, RuntimeError) as err:
+                        if 'ref' not in child.attrib:
+                            msg = _("missing attribute 'ref' in local group")
+                            self.parse_error(msg, child)
+                        else:
+                            self.parse_error(err, child)
+                        continue
 
-                if ref != self.name:
-                    xsd_group = XsdGroup(child, self.schema, self)
-                    if xsd_group.model == 'all':
-                        msg = _("'all' model can appears only at 1st level of a model group")
-                        self.parse_error(msg)
+                    if ref != self.name:
+                        xsd_group = XsdGroup(child, self.schema, self)
+                        if xsd_group.model == 'all':
+                            msg = _("'all' model can appears only at 1st level of a model group")
+                            self.parse_error(msg)
+                        else:
+                            self._group.append(xsd_group)
+                    elif self.redefine is not None:
+                        self._group.append(self.redefine)
+                        if child.get('minOccurs', '1') != '1' \
+                                or child.get('maxOccurs', '1') != '1':
+                            msg = _("Redefined group reference can't have "
+                                    "minOccurs/maxOccurs other than 1")
+                            self.parse_error(msg)
                     else:
-                        self._group.append(xsd_group)
-                elif self.redefine is not None:
-                    self._group.append(self.redefine)
-                    if child.get('minOccurs', '1') != '1' \
-                            or child.get('maxOccurs', '1') != '1':
-                        msg = _("Redefined group reference can't have "
-                                "minOccurs/maxOccurs other than 1")
-                        self.parse_error(msg)
-                else:
-                    msg = _("Circular definition detected for group %r")
-                    self.parse_error(msg % self.name)
+                        msg = _("Circular definition detected for group %r")
+                        self.parse_error(msg % self.name)
 
     def build(self) -> None:
-        if self._built:
-            return
-        self._built = True
+        if self._built is False:
+            with self._build_context():
+                for item in self._group:
+                    if isinstance(item, XsdElement):
+                        item.build()
 
-        for item in self._group:
-            if isinstance(item, XsdElement):
-                item.build()
-
-        if self.redefine is not None:
-            for group in self.redefine.iter_components(XsdGroup):
-                group.build()
+                if self.redefine is not None:
+                    for group in self.redefine.iter_components(XsdGroup):
+                        group.build()
 
     @property
     def schema_elem(self) -> ElementType:
@@ -897,14 +943,8 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         for e in group.iter_elements():
             if not isinstance(e, XsdElement):
                 continue
-            elif e.name == elem.tag:
-                other = e
-            else:
-                for other in e.iter_substitutes():
-                    if other.name == elem.tag:
-                        break
-                else:
-                    continue
+            elif (other := e.match(elem.tag)) is None:
+                continue
 
             if len(other.alternatives) != len(alternatives) or \
                     not xsd_type.is_dynamic_consistent(other.type):
@@ -924,13 +964,7 @@ class XsdGroup(XsdComponent, MutableSequence[ModelParticleType],
         matched element, or `None` if there is no match.
         """
         for xsd_element in self.iter_elements():
-            if isinstance(xsd_element, XsdElement):
-                if name == xsd_element.name:
-                    return xsd_element
-                for substitute in xsd_element.iter_substitutes():
-                    if name == substitute.name:
-                        return substitute
-            elif xsd_element.is_matching(name, group=self):
+            if xsd_element.is_matching(name, group=self):
                 return xsd_element
         return None
 
@@ -1223,41 +1257,42 @@ class Xsd11Group(XsdGroup):
                 self.parse_error(msg)
 
         for child in content_model:
-            if child.tag == nm.XSD_ELEMENT:
-                self.append(self.builders.element_class(child, self.schema, self))
-            elif child.tag == nm.XSD_ANY:
-                self._group.append(self.builders.any_element_class(child, self.schema, self))
-            elif child.tag in nm.MODEL_TAGS:
-                self._group.append(Xsd11Group(child, self.schema, self))
-            elif child.tag == nm.XSD_GROUP:
-                try:
-                    ref = self.schema.resolve_qname(child.attrib['ref'])
-                except (KeyError, ValueError, RuntimeError) as err:
-                    if 'ref' not in child.attrib:
-                        msg = _("missing attribute 'ref' in local group")
-                        self.parse_error(msg, child)
+            match child.tag:
+                case nm.XSD_ELEMENT:
+                    self._group.append(self.builders.element_class(child, self.schema, self))
+                case nm.XSD_ANY:
+                    self._group.append(self.builders.any_element_class(child, self.schema, self))
+                case x if x in nm.MODEL_TAGS:
+                    self._group.append(Xsd11Group(child, self.schema, self))
+                case nm.XSD_GROUP:
+                    try:
+                        ref = self.schema.resolve_qname(child.attrib['ref'])
+                    except (KeyError, ValueError, RuntimeError) as err:
+                        if 'ref' not in child.attrib:
+                            msg = _("missing attribute 'ref' in local group")
+                            self.parse_error(msg, child)
+                        else:
+                            self.parse_error(err, child)
+                        continue
+
+                    if ref != self.name:
+                        xsd_group = Xsd11Group(child, self.schema, self)
+                        self._group.append(xsd_group)
+                        if (self.model != 'all') ^ (xsd_group.model != 'all'):
+                            msg = _("an xs:{0} group cannot include a reference to an "
+                                    "xs:{1} group").format(self.model, xsd_group.model)
+                            self.parse_error(msg)
+                            self._group.pop()
+
+                    elif self.redefine is not None:
+                        if child.get('minOccurs', '1') != '1' or child.get('maxOccurs', '1') != '1':
+                            msg = _("Redefined group reference cannot have "
+                                    "minOccurs/maxOccurs other than 1")
+                            self.parse_error(msg)
+                        self._group.append(self.redefine)
                     else:
-                        self.parse_error(err, child)
-                    continue
-
-                if ref != self.name:
-                    xsd_group = Xsd11Group(child, self.schema, self)
-                    self._group.append(xsd_group)
-                    if (self.model != 'all') ^ (xsd_group.model != 'all'):
-                        msg = _("an xs:{0} group cannot include a reference to an "
-                                "xs:{1} group").format(self.model, xsd_group.model)
-                        self.parse_error(msg)
-                        self.pop()
-
-                elif self.redefine is not None:
-                    if child.get('minOccurs', '1') != '1' or child.get('maxOccurs', '1') != '1':
-                        msg = _("Redefined group reference cannot have "
-                                "minOccurs/maxOccurs other than 1")
-                        self.parse_error(msg)
-                    self._group.append(self.redefine)
-                else:
-                    msg = _("Circular definition detected for group %r")
-                    self.parse_error(msg % self.name)
+                        msg = _("Circular definition detected for group %r")
+                        self.parse_error(msg % self.name)
 
     def admits_restriction(self, model: str) -> bool:
         if self.model == model or self.model == 'all':

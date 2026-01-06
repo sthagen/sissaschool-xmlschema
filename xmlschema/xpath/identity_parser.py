@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2023, SISSA (International School for Advanced Studies).
+# Copyright (c), 2023-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -21,8 +21,8 @@ XSD_IDENTITY_XPATH_SYMBOLS = frozenset((
 
 
 class IdentityXPathParser(XPath2Parser):
+    # noinspection PyTypeChecker
     symbol_table = {
         k: v for k, v in XPath2Parser.symbol_table.items()
         if k in XSD_IDENTITY_XPATH_SYMBOLS
     }
-    SYMBOLS = XSD_IDENTITY_XPATH_SYMBOLS

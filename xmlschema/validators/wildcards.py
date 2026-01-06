@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2020, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -69,28 +69,27 @@ class XsdWildcard(XsdComponent):
 
     def _parse(self) -> None:
         # Parse namespace and processContents
-        namespace = self.elem.attrib.get('namespace', '##any').strip()
-
-        if namespace in ('##any', '##other'):
-            self.namespace = {namespace}
-        elif not namespace:
-            self.namespace = set()  # an empty value means no namespace allowed!
-        elif namespace == '##local':
-            self.namespace = {''}
-        elif namespace == '##targetNamespace':
-            self.namespace = {self.target_namespace}
-        else:
-            self.namespace = set()
-            for ns in namespace.split():
-                if ns == '##local':
-                    self.namespace.add('')
-                elif ns == '##targetNamespace':
-                    self.namespace.add(self.target_namespace)
-                elif ns.startswith('##'):
-                    msg = _("wrong value %r in 'namespace' attribute")
-                    self.parse_error(msg % ns)
-                else:
-                    self.namespace.add(ns)
+        match namespace := self.elem.attrib.get('namespace', '##any').strip():
+            case '##any' | '##other':
+                self.namespace = {namespace}
+            case '':
+                self.namespace = set()  # an empty value means no namespace allowed!
+            case '##local':
+                self.namespace = {''}
+            case '##targetNamespace':
+                self.namespace = {self.target_namespace}
+            case _:
+                self.namespace = set()
+                for ns in namespace.split():
+                    if ns == '##local':
+                        self.namespace.add('')
+                    elif ns == '##targetNamespace':
+                        self.namespace.add(self.target_namespace)
+                    elif ns.startswith('##'):
+                        msg = _("wrong value %r in 'namespace' attribute")
+                        self.parse_error(msg % ns)
+                    else:
+                        self.namespace.add(ns)
 
         self.process_contents = self.elem.attrib.get('processContents', 'strict')
         if self.process_contents not in ('strict', 'lax', 'skip'):

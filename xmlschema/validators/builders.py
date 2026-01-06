@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Callable, ItemsView, Iterator, Mapping, ValuesView, Iterable
 from operator import attrgetter
 from types import MappingProxyType
-from typing import Any, cast, NamedTuple, Optional, Union, Type, TypeVar
+from typing import Any, cast, NamedTuple, Optional, Union, TypeVar
 from xml.etree.ElementTree import Element
 
 import xmlschema.names as nm
@@ -25,7 +25,7 @@ from xmlschema.translation import gettext as _
 from xmlschema.utils.qnames import local_name, get_qname
 
 from .helpers import parse_xsd_derivation
-from .exceptions import XMLSchemaCircularityError
+from .exceptions import XMLSchemaCircularityError, XMLSchemaModelDepthError
 from .xsdbase import XsdComponent, XsdAnnotation
 from .builtins import BUILTIN_TYPES
 from .facets import XsdFacet, FACETS_CLASSES, XSD_10_FACETS, XSD_11_FACETS, \
@@ -82,11 +82,11 @@ class XsdBuilders:
     A descriptor that is bound to a schema class for providing versioned builders
     for XSD components.
     """
-    components: dict[str, Type[XsdComponent]]
-    facets: dict[str, Type[XsdFacet]]
-    identities: dict[str, Type[XsdIdentity]]
-    simple_types: dict[str, Type[XsdSimpleType]]
-    local_types: dict[str, Union[Type[BaseXsdType], BuilderType[XsdSimpleType]]]
+    components: dict[str, type[XsdComponent]]
+    facets: dict[str, type[XsdFacet]]
+    identities: dict[str, type[XsdIdentity]]
+    simple_types: dict[str, type[XsdSimpleType]]
+    local_types: dict[str, Union[type[BaseXsdType], BuilderType[XsdSimpleType]]]
     builtins: tuple[dict[str, Any], ...]
 
     __slots__ = ('_name', '_xsd_version', 'components', 'facets', 'identities',
@@ -99,8 +99,8 @@ class XsdBuilders:
                  'admitted_list_facets')
 
     def __init__(self, xsd_version: Optional[str] = None,
-                 *facets_classes: Type[XsdFacet],
-                 **classes: Type[XsdComponent]) -> None:
+                 *facets_classes: type[XsdFacet],
+                 **classes: type[XsdComponent]) -> None:
         if xsd_version is not None:
             self._xsd_version = xsd_version
 
@@ -115,7 +115,7 @@ class XsdBuilders:
             if k.endswith('_class'):
                 setattr(self, k, v)
 
-    def __set_name__(self, cls: Type[SchemaType], name: str) -> None:
+    def __set_name__(self, cls: type[SchemaType], name: str) -> None:
         self._name = name
         self._xsd_version = getattr(cls, 'XSD_VERSION', '1.0')
 
@@ -446,7 +446,7 @@ class StagedMap(Mapping[str, CT]):
             obj = self._staging[qname]
 
             if len(obj) == 2 and isinstance(obj, tuple):
-                _elem, _schema = obj  # type:ignore[misc]
+                _elem, _schema = obj  # type: ignore[unused-ignore, misc]
                 if _elem is elem and _schema is schema:
                     return  # ignored: it's the same component
                 elif schema is _schema.override:
@@ -507,8 +507,7 @@ class StagedMap(Mapping[str, CT]):
                 raise XMLSchemaCircularityError(qname, *obj[0])
 
             # Encapsulate into a tuple to catch circular builds
-            self._staging[qname] = cast(LoadedItemType, (obj,))
-
+            self._staging[qname] = ((elem, schema),)
             self._store[qname] = self._factory_or_class(elem, schema)
             self._staging.pop(qname)
             return self._store[qname]
@@ -812,7 +811,10 @@ class GlobalMaps(NamedTuple):
         # Build element declarations inside model groups.
         for schema in schemas:
             for group in schema.iter_components(XsdGroup):
-                group.build()
+                try:
+                    group.build()
+                except XMLSchemaModelDepthError as e:
+                    schema.parse_error(error=e, elem=group.elem)
 
         # Build identity references and XSD 1.1 assertions
         for schema in schemas:

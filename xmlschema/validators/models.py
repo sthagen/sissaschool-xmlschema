@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -261,16 +261,8 @@ class ModelVisitor:
             raise XMLSchemaValueError(f"can't match the tag, {self!r} is ended!")
         elif self.element.max_occurs == 0:
             return None
-        elif self.element.name is None:
-            return self.element.match(tag, group=self.root, occurs=self.occurs)
-        elif tag == self.element.name:
-            return self.element
         else:
-            for xsd_element in self.element.iter_substitutes():
-                if tag == xsd_element.name:
-                    return xsd_element
-            else:
-                return None
+            return self.element.match(tag, group=self.root, occurs=self.occurs)
 
     def advance(self, match: bool = False) -> Iterator[AdvanceYieldedType]:
         """

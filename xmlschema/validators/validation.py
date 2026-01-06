@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -14,7 +14,7 @@ from abc import abstractmethod, ABCMeta
 from collections import Counter
 from collections.abc import Iterable, Iterator, MutableSequence
 from functools import partial
-from typing import Any, Generic, Optional, Type, TYPE_CHECKING, TypeVar, Union
+from typing import Any, Generic, Optional, TYPE_CHECKING, TypeVar, Union
 from xml.etree.ElementTree import Element
 
 from elementpath.datatypes import AbstractDateTime, Duration, AbstractBinary
@@ -332,7 +332,7 @@ class DecodeContext(ValidationContext):
     def __init__(self,
                  source: XMLResource,
                  converter: Optional[XMLSchemaConverter] = None,
-                 decimal_type: Optional[Union[Type[str], Type[float]]] = None,
+                 decimal_type: type[str] | type[float] | None = None,
                  datetime_types: bool = False,
                  binary_types: bool = False,
                  filler: Optional[FillerType] = None,

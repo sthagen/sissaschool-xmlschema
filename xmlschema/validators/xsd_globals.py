@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -15,7 +15,7 @@ from collections.abc import Collection, Iterator, Iterable
 from contextlib import contextmanager
 from functools import cached_property
 from itertools import dropwhile
-from typing import Any, cast, Optional, Type
+from typing import Any, cast, Optional
 from elementpath import XPathToken, XPath2Parser
 
 import xmlschema.names as nm
@@ -39,7 +39,8 @@ from .models import check_model
 from . import XsdAttribute, XsdSimpleType, XsdComplexType, XsdElement, \
     XsdGroup, XsdIdentity, XsdUnion, XsdAtomicRestriction, \
     XsdAtomic, XsdAtomicBuiltin, XsdNotation, XsdAttributeGroup
-from .builders import GLOBAL_MAP_ATTRIBUTE, GlobalMaps
+from .builders import GLOBAL_MAP_ATTRIBUTE, GlobalMaps, TypesMap, NotationsMap, \
+    AttributesMap, AttributeGroupsMap, ElementsMap, GroupsMap
 from xmlschema import _limits
 
 
@@ -69,10 +70,34 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
     :param kwargs: other keyword arguments passed to :class:`SchemaLoader`.
     """
     _schemas: set[SchemaType]
+
     settings: SchemaSettings
     namespaces: NamespaceResourcesMap[SchemaType]
+
+    types: TypesMap
+    """Global types map"""
+
+    notations: NotationsMap
+    """Notations map"""
+
+    attributes: AttributesMap
+    """Global attributes map"""
+
+    attribute_groups: AttributeGroupsMap
+    """Attribute groups map"""
+
+    elements: ElementsMap
+    """Global elements map"""
+
+    groups: GroupsMap
+    """Model groups map"""
+
     substitution_groups: dict[str, set[XsdElement]]
+    """Substitution groups map"""
+
     identities: dict[str, XsdIdentity]
+    """Identity constraints map"""
+
     xpath_parser_class: type[XPath2Parser]
     assertion_parser_class: type[XsdAssertionXPathParser]
 
@@ -311,14 +336,14 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             return 'valid'
 
     @cached_property
-    def xpath_constructors(self) -> dict[str, Type[XPathToken]]:
+    def xpath_constructors(self) -> dict[str, type[XPathToken]]:
         if not self._built:
             return {}
 
         xpath_parser = self.xpath_parser_class()
         xpath_parser.schema = self.validator.xpath_proxy
 
-        constructors: dict[str, Type[XPathToken]] = {}
+        constructors: dict[str, type[XPathToken]] = {}
         for name, xsd_type in self.types.items():
             if isinstance(xsd_type, XsdAtomic) and \
                     not isinstance(xsd_type, XsdAtomicBuiltin) and \
@@ -348,7 +373,7 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
     def total_errors(self) -> int:
         return sum(s.total_errors for s in self._schemas)
 
-    def create_bindings(self, *bases: Type[Any], **attrs: Any) -> None:
+    def create_bindings(self, *bases: type[Any], **attrs: Any) -> None:
         """Creates data object bindings for the XSD elements of built schemas."""
         for xsd_element in self.iter_components(xsd_classes=XsdElement):
             assert isinstance(xsd_element, XsdElement)
@@ -531,6 +556,13 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             self.global_maps.load(schemas)
             self.types.build_builtins(self.validator)
             self.global_maps.build(schemas)
+
+            # Update substitutes of global elements
+            for name in self.substitution_groups:
+                xsd_element = self.elements[name]
+                assert not isinstance(xsd_element.substitutes, tuple)
+                xsd_element.substitutes.update(e.name for e in xsd_element.iter_substitutes())
+
             self.check(schemas)
 
             self._built = True
@@ -600,9 +632,8 @@ class XsdGlobals(XsdValidator, Collection[SchemaType]):
             schemas = {s for s in self._schemas if s.maps is self}
 
         # Checks substitution groups circularity
-        for qname in self.substitution_groups:
-            xsd_element = self.elements[qname]
-            if any(e is xsd_element for e in xsd_element.iter_substitutes()):
+        for xsd_element in self.elements.values():
+            if xsd_element.name in xsd_element.substitutes:
                 msg = _("circularity found for substitution group with head element {}")
                 xsd_element.parse_error(msg.format(xsd_element))
 

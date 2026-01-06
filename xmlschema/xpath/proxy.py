@@ -1,5 +1,5 @@
 #
-# Copyright (c), 2016-2024, SISSA (International School for Advanced Studies).
+# Copyright (c), 2016-2026, SISSA (International School for Advanced Studies).
 # All rights reserved.
 # This file is distributed under the terms of the MIT License.
 # See the file 'LICENSE' in the root directory of the present
@@ -18,8 +18,8 @@ from xmlschema.aliases import SchemaType
 from xmlschema.names import XSD_NAMESPACE
 
 if TYPE_CHECKING:
-    from xmlschema.validators import XsdElement, XsdAnyElement, XsdAssert
-    from .mixin import XPathElement
+    from xmlschema.validators import XsdElement, XsdAnyElement, XsdAssert  # noqa:F401
+    from .mixin import XPathElement  # noqa:F401
 
 BaseElementType = Union['XsdElement', 'XsdAnyElement', 'XsdAssert', 'XPathElement']
 
