@@ -12,7 +12,6 @@ This module contains base functions and classes XML Schema components.
 """
 import logging
 from collections.abc import Iterator, MutableMapping
-from contextlib import contextmanager
 from functools import cached_property
 from typing import TYPE_CHECKING, cast, Any, Optional, Union
 
@@ -30,6 +29,7 @@ from xmlschema.utils.etree import is_etree_element
 from xmlschema.utils.logger import format_xmlschema_stack, dump_data
 from xmlschema.arguments import check_validation_mode
 from xmlschema.resources import XMLResource
+from xmlschema.caching import schema_cache
 
 from .validation import ValidationContext
 from .exceptions import XMLSchemaParseError, XMLSchemaNotBuiltError
@@ -68,6 +68,23 @@ class XsdValidator:
         for c in cls.__mro__:
             if hasattr(c, '__slots__'):
                 yield from c.__slots__
+
+    @classmethod
+    def _cached_properties(cls) -> Iterator[str]:
+        for k in dir(cls):
+            if isinstance(getattr(cls, k), cached_property):
+                yield k
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = {attr: getattr(self, attr) for attr in self._mro_slots()}
+        state.update(self.__dict__)
+        for k in self._cached_properties():
+            state.pop(k, None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for attr, value in state.items():
+            object.__setattr__(self, attr, value)
 
     @property
     def built(self) -> bool:
@@ -300,16 +317,6 @@ class XsdComponent(XsdValidator):
     def build(self) -> None:
         self._built = True
 
-    @contextmanager
-    def _build_context(self) -> Iterator['XsdComponent']:
-        self._built = None
-        try:
-            yield self
-            self._built = True
-        finally:
-            if self._built is None:
-                self._built = False
-
     @property
     def validation_attempted(self) -> str:
         return 'full' if self._built else 'partial'
@@ -318,6 +325,7 @@ class XsdComponent(XsdValidator):
         """Returns `True` if the instance is a global component, `False` if it's local."""
         return self.parent is None
 
+    @schema_cache
     def is_override(self) -> bool:
         """Returns `True` if the instance is an override of a global component."""
         if self.parent is not None:
@@ -572,6 +580,7 @@ class XsdComponent(XsdValidator):
                 return mapping.get(self.local_name)  # type: ignore[arg-type]
             return None
 
+    @schema_cache
     def get_global(self) -> 'XsdComponent':
         """Returns the global XSD component that contains the component instance."""
         if self.parent is None:
@@ -585,6 +594,7 @@ class XsdComponent(XsdValidator):
             msg = _("parent circularity from {}")
             raise XMLSchemaValueError(msg.format(self))
 
+    @schema_cache
     def get_parent_type(self) -> Optional['XsdType']:
         """
         Returns the nearest XSD type that contains the component instance,
@@ -830,6 +840,7 @@ class XsdType(XsdComponent):
     def is_restriction(self) -> bool:
         return self.derivation == 'restriction'
 
+    @schema_cache
     def is_blocked(self, xsd_element: 'XsdElement') -> bool:
         """
         Returns `True` if the base type derivation is blocked, `False` otherwise.
@@ -870,6 +881,7 @@ class XsdType(XsdComponent):
     def text_is_valid(self, text: str, context: Optional[ValidationContext] = None) -> bool:
         raise NotImplementedError()
 
+    @schema_cache
     def overall_min_occurs(self, particle: ModelParticleType) -> int:
         """Returns the overall minimum for occurrences of a content model particle."""
         content = self.model_group
@@ -877,6 +889,7 @@ class XsdType(XsdComponent):
             raise XMLSchemaTypeError(_("content type must be 'element-only' or 'mixed'"))
         return content.overall_min_occurs(particle)
 
+    @schema_cache
     def overall_max_occurs(self, particle: ModelParticleType) -> Optional[int]:
         """Returns the overall maximum for occurrences of a content model particle."""
         content = self.model_group

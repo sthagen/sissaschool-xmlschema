@@ -182,6 +182,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     for assertions. For default a full XPath 2.0 processor is used.
     :param use_meta: if `True` the schema processor uses the validator meta-schema as \
     parent schema. Ignored if either *global_maps* or *parent* argument is provided.
+    :param use_cache: if `True` the schema processor enable caching for components on \
+    a cache managed by global maps. For default caching is enabled except for predefined \
+    meta-schema maps.
     :param loglevel: for setting a different logging level for schema initialization \
     and building. For default is WARNING (30). For INFO level set it with 20, for \
     DEBUG level with 10. The default loglevel is restored after schema building, \
@@ -279,6 +282,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                  use_fallback: bool = True,
                  use_xpath3: bool = False,
                  use_meta: bool = True,
+                 use_cache: bool = True,
                  loglevel: Optional[Union[str, int]] = None,
                  build: bool = True,
                  partial: bool = False,
@@ -304,6 +308,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 base_url=base_url,
                 use_fallback=use_fallback,
                 use_xpath3=use_xpath3,
+                use_cache=use_cache,
                 loglevel=loglevel,
                 **kwargs,
             ))
@@ -483,20 +488,6 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
 
     def __len__(self) -> int:
         return len(self.elements)
-
-    def __getstate__(self) -> dict[str, Any]:
-        state = {attr: getattr(self, attr) for attr in self._mro_slots()}
-        state.update(self.__dict__)
-        state.pop('components', None)
-        state.pop('root_elements', None)
-        state.pop('simple_types', None)
-        state.pop('complex_types', None)
-        state.pop('validation_context', None)
-        return state
-
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        for attr, value in state.items():
-            object.__setattr__(self, attr, value)
 
     def __copy__(self) -> SchemaType:
         schema: SchemaType = object.__new__(self.__class__)
@@ -727,9 +718,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     @cached_property
     def components(self) -> dict[ElementType, XsdComponent]:
         """A map from XSD ElementTree elements to their schema components."""
-        self.check_validator(self.validation)
         return {
-            c.elem: c for c in self.iter_components() if isinstance(c, XsdComponent)
+            c.elem: c for c in cast(Iterator[XsdComponent], self.iter_components(XsdComponent))
         }
 
     @cached_property
@@ -794,6 +784,7 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                 namespace=nm.XSD_NAMESPACE,
                 global_maps=global_maps,
                 defuse='never',
+                use_cache=False,
                 partial=True,
             )
 
@@ -845,12 +836,9 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         return self.builders.create_element(name, self, parent, text, **attrib)
 
     def clear(self) -> None:
-        """Clears the schema cache."""
-        self.__dict__.pop('components', None)
-        self.__dict__.pop('root_elements', None)
-        self.__dict__.pop('simple_types', None)
-        self.__dict__.pop('complex_types', None)
-        self.__dict__.pop('validation_attempted', None)
+        """ Clears the schema caches unloading components and schema node tree."""
+        for attr in self._cached_properties():
+            self.__dict__.pop(attr, None)
 
     def build(self) -> None:
         """Builds the schema's XSD global maps."""
@@ -1826,10 +1814,10 @@ class XMLSchema10(XMLSchemaBase):
     """
     builders = XsdBuilders()
 
-    META_SCHEMA = f'{SCHEMAS_DIR}XSD_1.0/XMLSchema.xsd'
+    META_SCHEMA = SCHEMAS_DIR.joinpath('XSD_1.0', 'XMLSchema.xsd').as_uri()
     BASE_SCHEMAS = {
-        nm.XML_NAMESPACE: f'{SCHEMAS_DIR}XML/xml.xsd',
-        nm.XSI_NAMESPACE: f'{SCHEMAS_DIR}XSI/XMLSchema-instance.xsd',
+        nm.XML_NAMESPACE: SCHEMAS_DIR.joinpath('XML', 'xml.xsd').as_uri(),
+        nm.XSI_NAMESPACE: SCHEMAS_DIR.joinpath('XSI', 'XMLSchema-instance.xsd').as_uri(),
     }
 
 
@@ -1872,12 +1860,12 @@ class XMLSchema11(XMLSchemaBase):
     builders = XsdBuilders()
 
     XSD_VERSION = '1.1'
-    META_SCHEMA = f'{SCHEMAS_DIR}XSD_1.1/XMLSchema.xsd'
+    META_SCHEMA = SCHEMAS_DIR.joinpath('XSD_1.1', 'XMLSchema.xsd').as_uri()
     BASE_SCHEMAS = {
-        nm.XML_NAMESPACE: f'{SCHEMAS_DIR}XML/xml.xsd',
-        nm.XSI_NAMESPACE: f'{SCHEMAS_DIR}XSI/XMLSchema-instance.xsd',
-        nm.VC_NAMESPACE: f'{SCHEMAS_DIR}VC/XMLSchema-versioning.xsd',
-        nm.XSD_NAMESPACE: f'{SCHEMAS_DIR}XSD_1.1/xsd11-extra.xsd',
+        nm.XML_NAMESPACE: SCHEMAS_DIR.joinpath('XML', 'xml.xsd').as_uri(),
+        nm.XSI_NAMESPACE: SCHEMAS_DIR.joinpath('XSI', 'XMLSchema-instance.xsd').as_uri(),
+        nm.VC_NAMESPACE: SCHEMAS_DIR.joinpath('VC', 'XMLSchema-versioning.xsd').as_uri(),
+        nm.XSD_NAMESPACE: SCHEMAS_DIR.joinpath('XSD_1.1', 'xsd11-extra.xsd').as_uri(),
     }
 
 
