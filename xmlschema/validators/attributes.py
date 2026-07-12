@@ -51,6 +51,8 @@ class XsdAttribute(XsdComponent, ValidationMixin[Optional[str], DecodedValueType
           {any attributes with non-schema namespace ...}>
           Content: (annotation?, simpleType?)
         </attribute>
+
+    :ivar type: The XSD simpleType of the attribute.
     """
     _ADMITTED_TAGS = nm.XSD_ATTRIBUTE,
 
@@ -704,7 +706,7 @@ class XsdAttributeGroup(
                     context.validation_error(validation, self, reason, obj)
                     continue
             else:
-                if xsd_attribute.use == 'prohibited' and \
+                if xsd_attribute.use == 'prohibited' and xsd_attribute.fixed is None and \
                         (None not in self or not self._attribute_group[None].is_matching(name)):
                     reason = _("use of attribute %r is prohibited") % name
                     context.validation_error(validation, self, reason, obj)
